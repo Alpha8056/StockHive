@@ -13,7 +13,7 @@ venv/
 *.sqlite
 *.sqlite3
 
-# Runtime config + weather cache (created by setup-launcher.sh)
+# Runtime config + weather cache (created by setup.sh)
 config.json
 data_cache/
 

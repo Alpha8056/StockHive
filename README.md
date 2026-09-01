@@ -29,21 +29,22 @@ hostnames) means nothing needs a static IP or router configuration.
 
 ## Install
 
-On the device you want as the shared home screen:
+Same script everywhere — it asks what this machine should run:
 ```bash
 git clone <this-repo> ~/StockHive && cd ~/StockHive
-chmod +x setup-launcher.sh && sudo ./setup-launcher.sh
+chmod +x setup.sh && sudo ./setup.sh
 ```
+Choose **node**, **launcher**, or **both**. If you pick both on the same
+machine (handy for testing without a second Pi/LXC), it'll ask for two
+different ports — nginx can't have both apps answer on 80 at once — and
+defaults to node on 80 / launcher on 8080.
 
-On every Pi you want as a node (Kitchen, Tote Storage, etc.):
-```bash
-git clone <this-repo> ~/StockHive && cd ~/StockHive
-chmod +x setup-node.sh && sudo ./setup-node.sh
-```
-You'll be asked for an instance name and theme color — both are editable
-later, live, from that node's `/settings` page (Settings > Page Labels also
-lets you rename wording like "Grocery List" to fit whatever the node is
-tracking, e.g. "Part List" for a tote-storage instance).
+For a node, you'll also be asked for an instance name and theme color —
+both are editable later, live, from that node's `/settings` page (Settings
+> Page Labels also lets you rename wording like "Grocery List" to fit
+whatever the node is tracking, e.g. "Part List" for a tote-storage
+instance). For the launcher, you'll be asked for a ZIP code for the
+weather widget.
 
 ## Repo layout
 

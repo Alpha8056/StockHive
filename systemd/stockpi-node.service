@@ -6,6 +6,7 @@ After=network.target
 User=kinv
 WorkingDirectory=/home/kinv/node
 Environment="PATH=/home/kinv/node/venv/bin"
+Environment="STOCKPI_PUBLIC_PORT=__PUBLIC_PORT__"
 ExecStart=/home/kinv/node/venv/bin/gunicorn -w 1 -b 127.0.0.1:5000 --timeout 30 app:app
 Restart=always
 RestartSec=3
