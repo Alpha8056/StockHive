@@ -1388,6 +1388,19 @@ def settings_page():
       </div>
 
       <div class="card">
+        <h2>Advertised Address</h2>
+        <div class="muted">The IP this node broadcasts to the launcher (used to build its tile link). Auto-detected: <b>{mdns_advertise.detected_lan_ip()}</b> &mdash; usually the LAN, which isn't reachable if you're opening the launcher over a VPN like Tailscale from off that LAN.</div>
+        <form method="post" action="/settings/update">
+          <div class="fieldRow" style="margin-top:10px;">
+            <label class="muted" style="min-width:110px;">Manual override</label>
+            <input type="text" name="advertise_ip" value="{ident['advertise_ip_override']}" placeholder="100.x.x.x (Tailscale IP)">
+          </div>
+          <div class="row"><button class="btn btn-wide" type="submit">Save</button></div>
+        </form>
+        <div class="muted" style="margin-top:8px;">Currently broadcasting: <b>{ident['advertised_ip']}</b>. Leave blank to auto-detect.</div>
+      </div>
+
+      <div class="card">
         <h2>Launcher</h2>
         <div class="muted">Auto-discovered via mDNS: <b>{ident['launcher_url'] or 'not found yet'}</b></div>
         <form method="post" action="/settings/update">
@@ -1425,12 +1438,26 @@ def settings_update():
     node_label = request.form.get("node_label")
     theme = request.form.get("theme")
     launcher_url = request.form.get("launcher_url")
+    advertise_ip = request.form.get("advertise_ip")
 
     if launcher_url is not None:
         labels.set_launcher_url(launcher_url)
 
-    if node_label is not None or theme is not None:
-        identity.update_identity(label=node_label, theme=theme)
+    if advertise_ip is not None:
+        advertise_ip = advertise_ip.strip()
+        if advertise_ip:
+            # Validated here rather than at mDNS broadcast time — an
+            # invalid value there fails silently deep inside a background
+            # thread and looks exactly like the mDNS registration bugs
+            # already chased down earlier, instead of telling the user
+            # immediately what's wrong.
+            try:
+                socket.inet_aton(advertise_ip)
+            except OSError:
+                return redirect(f"/settings?msgtype=danger&msg=%22{advertise_ip}%22%20is%20not%20a%20valid%20IPv4%20address")
+
+    if node_label is not None or theme is not None or advertise_ip is not None:
+        identity.update_identity(label=node_label, theme=theme, advertise_ip=advertise_ip)
 
     return redirect("/settings?msgtype=ok&msg=Settings%20saved")
 

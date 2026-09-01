@@ -64,3 +64,17 @@ def get_launcher_url() -> str:
 
 def set_launcher_url(value: str) -> None:
     db.set_setting("launcher_url", value.strip())
+
+
+def get_advertise_ip() -> str:
+    """Manual override for the IP this node broadcasts over mDNS (and
+    that the launcher builds tile links from). Auto-detection picks
+    whichever interface has the default route, which is normally the LAN
+    — on a box that's also on a VPN/Tailscale, that's not reachable to
+    anyone connecting to the launcher from off the LAN, so this lets you
+    pin it to the VPN address instead. Blank = auto-detect (unchanged)."""
+    return db.get_setting("advertise_ip", "")
+
+
+def set_advertise_ip(value: str) -> None:
+    db.set_setting("advertise_ip", value.strip())

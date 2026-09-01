@@ -31,7 +31,7 @@ _lock = threading.Lock()
 _discovered_launcher_url = None
 
 
-def _local_ip() -> str:
+def detected_lan_ip() -> str:
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("1.1.1.1", 80))
@@ -42,13 +42,20 @@ def _local_ip() -> str:
         return "127.0.0.1"
 
 
+def advertised_ip() -> str:
+    """The IP actually broadcast over mDNS: the manual override from
+    Settings if one is set, otherwise whatever interface has the default
+    route (normally the LAN, not a VPN like Tailscale)."""
+    return labels.get_advertise_ip() or detected_lan_ip()
+
+
 def _build_service_info(port: int) -> ServiceInfo:
     node_id = db.get_node_id()
     name = f"{node_id}.{NODE_SERVICE_TYPE}"
     return ServiceInfo(
         NODE_SERVICE_TYPE,
         name,
-        addresses=[socket.inet_aton(_local_ip())],
+        addresses=[socket.inet_aton(advertised_ip())],
         port=port,
         properties={
             "id": node_id,

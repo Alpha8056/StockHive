@@ -16,18 +16,24 @@ def snapshot() -> dict:
         "label": labels.get_node_label(),
         "theme": labels.get_theme(),
         "launcher_url": mdns_advertise.get_launcher_url(),
+        "advertise_ip_override": labels.get_advertise_ip(),
+        "advertised_ip": mdns_advertise.advertised_ip(),
     }
 
 
-def update_identity(label: str = None, theme: str = None) -> None:
-    """Save label/theme changes and immediately re-announce over mDNS
-    so the launcher's tile updates without waiting on TTL expiry."""
+def update_identity(label: str = None, theme: str = None, advertise_ip: str = None) -> None:
+    """Save label/theme/advertise-IP changes and immediately re-announce
+    over mDNS so the launcher's tile updates without waiting on TTL
+    expiry."""
     changed = False
     if label is not None:
         labels.set_node_label(label)
         changed = True
     if theme is not None:
         labels.set_theme(theme)
+        changed = True
+    if advertise_ip is not None:
+        labels.set_advertise_ip(advertise_ip)
         changed = True
     if changed:
         mdns_advertise.refresh()
