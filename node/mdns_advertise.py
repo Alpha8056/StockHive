@@ -51,7 +51,12 @@ def _build_service_info(port: int) -> ServiceInfo:
             "theme": labels.get_theme(),
             "version": VERSION,
         },
-        server=f"{socket.gethostname()}.local.",
+        # No explicit `server` — it defaults to `name`, which is already
+        # globally unique (includes node_id). Setting it to the OS
+        # hostname is wrong when a node and a launcher share one machine:
+        # both would register the exact same "server" identity from two
+        # independent Zeroconf instances, and the second registration can
+        # silently fail to actually announce.
     )
 
 

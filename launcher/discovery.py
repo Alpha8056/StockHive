@@ -137,7 +137,9 @@ def start(launcher_port: int) -> None:
             addresses=[socket.inet_aton(_local_ip())],
             port=launcher_port,
             properties={"version": VERSION},
-            server=f"{socket.gethostname()}.local.",
+            # No explicit `server` — see the matching comment in
+            # node/mdns_advertise.py. It defaults to `name`, avoiding a
+            # collision with a node's mDNS registration on the same host.
         )
         _zc.register_service(_launcher_service_info)
     except Exception as e:
