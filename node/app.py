@@ -4,11 +4,14 @@
 VERSION = "2.0.0"
 
 import os
+import subprocess
+import threading
 import time
 import shutil
 import io
 import socket
 from datetime import date, datetime
+from urllib.parse import quote
 
 from flask import Flask, request, redirect, send_file, Response, url_for, render_template
 
@@ -191,6 +194,46 @@ EXPIRATION_WARN_DAYS = int(os.environ.get("STOCKPI_EXPIRATION_WARN_DAYS", "3"))
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "inventory.db")
 UPLOAD_TMP = os.path.join(BASE_DIR, "inventory.restore.tmp")
+REPO_DIR = os.path.dirname(BASE_DIR)
+VENV_PIP = os.path.join(BASE_DIR, "venv", "bin", "pip")
+SERVICE_NAME = "stockpi-node.service"
+
+# ============================================================
+# SECTION: Build Info + Device Controls (Settings > Device)
+# ============================================================
+
+def _get_git_build() -> str:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=REPO_DIR, capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _delayed_restart(delay: float = 1.0) -> None:
+    """Restarts this node's own systemd service from a background thread
+    after a short delay, so the HTTP response announcing the restart has
+    time to actually reach the browser first — doing this inline in the
+    request thread would have systemctl kill the very process trying to
+    run it. Relies on the passwordless sudoers entry setup.sh installs
+    for exactly this command."""
+    def _run():
+        time.sleep(delay)
+        subprocess.run(["sudo", "systemctl", "restart", SERVICE_NAME])
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def _delayed_poweroff(delay: float = 1.0) -> None:
+    def _run():
+        time.sleep(delay)
+        subprocess.run(["sudo", "systemctl", "poweroff"])
+    threading.Thread(target=_run, daemon=True).start()
+
 
 # ============================================================
 # SECTION: UI Helpers
@@ -1429,8 +1472,55 @@ def settings_page():
         </form>
       </div>
 
+      <div class="card">
+        <h2>Device</h2>
+        <div class="muted">Build: <span class="mono">{_get_git_build()}</span></div>
+        <div class="btnRow" style="margin-top:12px;">
+          <form class="inline" method="post" action="/system/restart" onsubmit="return confirm('Restart the StockHive service on this device?');">
+            <button class="btn btn-wide" type="submit">Restart Service</button>
+          </form>
+          <form class="inline" method="post" action="/system/update" onsubmit="return confirm('Pull the latest build from GitHub and restart? This can take a minute.');">
+            <button class="btn btn-wide btn-warn" type="submit">Update</button>
+          </form>
+          <form class="inline" method="post" action="/system/shutdown" onsubmit="return confirm('Shut down this device? You will need physical or hypervisor access to turn it back on.');">
+            <button class="btn btn-wide btn-danger" type="submit">Shutdown Device</button>
+          </form>
+        </div>
+      </div>
+
     </div></div>
     """
+
+
+@app.route("/system/restart", methods=["POST"])
+def system_restart():
+    _delayed_restart()
+    return redirect("/settings?msgtype=ok&msg=Restarting%20service%E2%80%A6")
+
+
+@app.route("/system/update", methods=["POST"])
+def system_update():
+    try:
+        subprocess.run(
+            ["git", "pull"], cwd=REPO_DIR, check=True,
+            capture_output=True, text=True, timeout=60,
+        )
+        subprocess.run(
+            [VENV_PIP, "install", "-r", os.path.join(BASE_DIR, "requirements.txt"), "--quiet"],
+            check=True, capture_output=True, text=True, timeout=180,
+        )
+    except Exception as e:
+        detail = (getattr(e, "stderr", None) or str(e) or "").replace("\n", " ").strip()
+        return redirect(f"/settings?msgtype=danger&msg=Update%20failed%3A%20{quote(detail[:200])}")
+
+    _delayed_restart()
+    return redirect("/settings?msgtype=ok&msg=Updated%20to%20latest%20build%20%E2%80%94%20restarting%E2%80%A6")
+
+
+@app.route("/system/shutdown", methods=["POST"])
+def system_shutdown():
+    _delayed_poweroff()
+    return redirect("/settings?msgtype=ok&msg=Shutting%20down%E2%80%A6")
 
 
 @app.route("/settings/update", methods=["POST"])

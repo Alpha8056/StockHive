@@ -155,6 +155,7 @@ PYEOF
 
   cat > /etc/sudoers.d/stockpi-node <<EOF
 $REAL_USER ALL=(ALL) NOPASSWD: /bin/systemctl restart stockpi-node.service
+$REAL_USER ALL=(ALL) NOPASSWD: /bin/systemctl poweroff
 EOF
   chmod 0440 /etc/sudoers.d/stockpi-node
   success "stockpi-node.service installed and started on port $NODE_PORT."
@@ -209,6 +210,7 @@ EOF
 
   cat > /etc/sudoers.d/stockpi-launcher <<EOF
 $REAL_USER ALL=(ALL) NOPASSWD: /bin/systemctl restart stockpi-launcher.service
+$REAL_USER ALL=(ALL) NOPASSWD: /bin/systemctl poweroff
 EOF
   chmod 0440 /etc/sudoers.d/stockpi-launcher
   success "stockpi-launcher.service installed and started on port $LAUNCHER_PORT."

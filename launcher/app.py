@@ -8,7 +8,10 @@
 VERSION = "2.0.0"
 
 import os
+import subprocess
+import threading
 import time
+from urllib.parse import quote
 
 from flask import Flask, jsonify, redirect, render_template_string, request, send_from_directory
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -23,6 +26,11 @@ import storm_proximity
 # port) — this is what gets advertised over mDNS so nodes can find their
 # way back. Gunicorn's own bind port is set separately via its -b flag.
 PUBLIC_PORT = int(os.environ.get("STOCKPI_PUBLIC_PORT", "80"))
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_DIR = os.path.dirname(BASE_DIR)
+VENV_PIP = os.path.join(BASE_DIR, "venv", "bin", "pip")
+SERVICE_NAME = "stockpi-launcher.service"
 
 nodes_db.init_db()
 discovery.start(PUBLIC_PORT)
@@ -217,6 +225,74 @@ def debug_mdns():
 
 
 # ============================================================
+# SECTION: Build Info + Device Controls (Settings > Device)
+# ============================================================
+
+def _get_git_build() -> str:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=REPO_DIR, capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _delayed_restart(delay: float = 1.0) -> None:
+    """Restarts the launcher's own systemd service from a background
+    thread after a short delay, so the HTTP response announcing the
+    restart has time to actually reach the browser first — doing this
+    inline in the request thread would have systemctl kill the very
+    process trying to run it. Relies on the passwordless sudoers entry
+    setup.sh installs for exactly this command."""
+    def _run():
+        time.sleep(delay)
+        subprocess.run(["sudo", "systemctl", "restart", SERVICE_NAME])
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def _delayed_poweroff(delay: float = 1.0) -> None:
+    def _run():
+        time.sleep(delay)
+        subprocess.run(["sudo", "systemctl", "poweroff"])
+    threading.Thread(target=_run, daemon=True).start()
+
+
+@app.post("/system/restart")
+def system_restart():
+    _delayed_restart()
+    return redirect("/settings?msgtype=ok&msg=Restarting%20service%E2%80%A6")
+
+
+@app.post("/system/update")
+def system_update():
+    try:
+        subprocess.run(
+            ["git", "pull"], cwd=REPO_DIR, check=True,
+            capture_output=True, text=True, timeout=60,
+        )
+        subprocess.run(
+            [VENV_PIP, "install", "-r", os.path.join(BASE_DIR, "requirements.txt"), "--quiet"],
+            check=True, capture_output=True, text=True, timeout=180,
+        )
+    except Exception as e:
+        detail = (getattr(e, "stderr", None) or str(e) or "").replace("\n", " ").strip()
+        return redirect(f"/settings?msgtype=danger&msg=Update%20failed%3A%20{quote(detail[:200])}")
+
+    _delayed_restart()
+    return redirect("/settings?msgtype=ok&msg=Updated%20to%20latest%20build%20%E2%80%94%20restarting%E2%80%A6")
+
+
+@app.post("/system/shutdown")
+def system_shutdown():
+    _delayed_poweroff()
+    return redirect("/settings?msgtype=ok&msg=Shutting%20down%E2%80%A6")
+
+
+# ============================================================
 # SECTION: Pages
 # ============================================================
 
@@ -247,11 +323,21 @@ SETTINGS_HTML = """
   th{color:var(--muted);}
   .pill{display:inline-block;padding:4px 10px;border-radius:999px;border:1px solid var(--border);font-size:12px;font-weight:700;}
   .up{color:#34d399;} .down{color:#f87171;}
+  .btnRow{display:flex;gap:10px;flex-wrap:wrap;}
+  .btnWarn{border-color:rgba(247,201,72,.5);}
+  .banner{padding:12px 16px;border-radius:10px;border:1px solid var(--border);margin-bottom:16px;font-weight:700;}
+  .banner.ok{color:#34d399;border-color:rgba(52,211,153,.4);}
+  .banner.danger{color:#f87171;border-color:rgba(248,113,113,.4);}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;}
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>Launcher Settings</h1>
+
+  {% if request.args.get('msg') %}
+  <div class="banner {{ request.args.get('msgtype', 'ok') }}">{{ request.args.get('msg') }}</div>
+  {% endif %}
 
   <div class="card">
     <h2 style="margin-bottom:10px;">Weather Location</h2>
@@ -290,6 +376,22 @@ SETTINGS_HTML = """
     </table>
   </div>
 
+  <div class="card">
+    <h2 style="margin-bottom:10px;">Device</h2>
+    <div style="color:var(--muted);">Build: <span class="mono">{{ build }}</span></div>
+    <div class="btnRow" style="margin-top:12px;">
+      <form method="post" action="/system/restart" onsubmit="return confirm('Restart the StockHive service on this device?');">
+        <button class="btn" type="submit">Restart Service</button>
+      </form>
+      <form method="post" action="/system/update" onsubmit="return confirm('Pull the latest build from GitHub and restart? This can take a minute.');">
+        <button class="btn btnWarn" type="submit">Update</button>
+      </form>
+      <form method="post" action="/system/shutdown" onsubmit="return confirm('Shut down this device? You will need physical or hypervisor access to turn it back on.');">
+        <button class="btn btnDanger" type="submit">Shutdown Device</button>
+      </form>
+    </div>
+  </div>
+
   <a class="btn" href="/">Back to Launcher</a>
 </div>
 </body>
@@ -301,6 +403,7 @@ SETTINGS_HTML = """
 def settings_page():
     return render_template_string(
         SETTINGS_HTML,
+        build=_get_git_build(),
         weather_zip=weather_client.get_weather_zip(),
         nodes=[_format_node(r) for r in nodes_db.list_nodes(include_deleted=False)],
     )
