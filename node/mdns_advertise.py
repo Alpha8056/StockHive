@@ -15,7 +15,11 @@ import db
 import labels
 
 NODE_SERVICE_TYPE = "_stockpi._tcp.local."
-LAUNCHER_SERVICE_TYPE = "_stockpi-launcher._tcp.local."
+# Must match launcher/discovery.py exactly. DNS-SD service type labels
+# are capped at 15 characters (RFC 6763) — "_stockpi-launcher" (16) would
+# silently fail registration on the launcher's side because of this;
+# "_stockhive" (9) stays under the limit.
+LAUNCHER_SERVICE_TYPE = "_stockhive._tcp.local."
 
 VERSION = "2.0.0"
 

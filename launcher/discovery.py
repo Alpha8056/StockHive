@@ -2,7 +2,7 @@
 # FILE: discovery.py
 # Browses mDNS for StockPi nodes (_stockpi._tcp.local.) and keeps
 # nodes.db in sync, and advertises the launcher itself
-# (_stockpi-launcher._tcp.local.) so nodes can find their way back.
+# (_stockhive._tcp.local.) so nodes can find their way back.
 # ============================================================
 
 import socket
@@ -14,7 +14,10 @@ from zeroconf import ServiceInfo, ServiceBrowser, ServiceListener, Zeroconf
 import nodes_db
 
 NODE_SERVICE_TYPE = "_stockpi._tcp.local."
-LAUNCHER_SERVICE_TYPE = "_stockpi-launcher._tcp.local."
+# DNS-SD service type labels are capped at 15 characters (RFC 6763) —
+# "_stockpi-launcher" (16) silently failed registration because of this;
+# "_stockhive" (9) stays under the limit.
+LAUNCHER_SERVICE_TYPE = "_stockhive._tcp.local."
 
 VERSION = "2.0.0"
 
