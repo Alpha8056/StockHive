@@ -32,6 +32,13 @@ REPO_DIR = os.path.dirname(BASE_DIR)
 VENV_PIP = os.path.join(BASE_DIR, "venv", "bin", "pip")
 SERVICE_NAME = "stockpi-launcher.service"
 
+# Absolute paths, not bare command names — the systemd unit sets PATH to
+# just this app's venv (so gunicorn resolves the right python/pip), which
+# means a plain "git"/"sudo" can't be found via PATH lookup at all.
+GIT_BIN = "/usr/bin/git"
+SUDO_BIN = "/usr/bin/sudo"
+SYSTEMCTL_BIN = "/bin/systemctl"  # must match the path in the sudoers rule exactly
+
 nodes_db.init_db()
 discovery.start(PUBLIC_PORT)
 
@@ -231,7 +238,7 @@ def debug_mdns():
 def _get_git_build() -> str:
     try:
         result = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
+            [GIT_BIN, "rev-parse", "--short", "HEAD"],
             cwd=REPO_DIR, capture_output=True, text=True, timeout=5,
         )
         if result.returncode == 0 and result.stdout.strip():
@@ -250,14 +257,14 @@ def _delayed_restart(delay: float = 1.0) -> None:
     setup.sh installs for exactly this command."""
     def _run():
         time.sleep(delay)
-        subprocess.run(["sudo", "systemctl", "restart", SERVICE_NAME])
+        subprocess.run([SUDO_BIN, SYSTEMCTL_BIN, "restart", SERVICE_NAME])
     threading.Thread(target=_run, daemon=True).start()
 
 
 def _delayed_poweroff(delay: float = 1.0) -> None:
     def _run():
         time.sleep(delay)
-        subprocess.run(["sudo", "systemctl", "poweroff"])
+        subprocess.run([SUDO_BIN, SYSTEMCTL_BIN, "poweroff"])
     threading.Thread(target=_run, daemon=True).start()
 
 
@@ -271,7 +278,7 @@ def system_restart():
 def system_update():
     try:
         subprocess.run(
-            ["git", "pull"], cwd=REPO_DIR, check=True,
+            [GIT_BIN, "pull"], cwd=REPO_DIR, check=True,
             capture_output=True, text=True, timeout=60,
         )
         subprocess.run(
