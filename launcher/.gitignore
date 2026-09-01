@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtualenv
+venv/
+.env
+
+# Databases / local data
+*.db
+*.sqlite
+*.sqlite3
+
+# Runtime config + weather cache (created by setup-launcher.sh)
+config.json
+data_cache/
+
+# OS junk
+.DS_Store

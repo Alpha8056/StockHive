@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+
+# Virtualenvs
+venv/
+.venv/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Old v1 repo (StockPi-InfoPanel), kept on disk locally as a fallback
+# reference only — not part of the StockHive v2 repo/history.
+StockPi-InfoPanel-main/
+
+# Local planning artifact, not part of the app
+StockHive Claude info.txt
+

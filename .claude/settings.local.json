@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\MainDell\\\\Desktop\\\\StockHive\\\\StockPi-InfoPanel-main\\\\kitchen_inventory\" -File | Select-Object Name, Length; \"---\"; \\(Get-Content \"C:\\\\Users\\\\MainDell\\\\Desktop\\\\StockHive\\\\StockPi-InfoPanel-main\\\\kitchen_inventory\\\\app.py\" | Measure-Object -Line\\).Lines; \\(Get-Content \"C:\\\\Users\\\\MainDell\\\\Desktop\\\\StockHive\\\\StockPi-InfoPanel-main\\\\kitchen_inventory\\\\inventory.py\" | Measure-Object -Line\\).Lines)",
+      "PowerShell(\\(Get-Content \"C:\\\\Users\\\\MainDell\\\\Desktop\\\\StockHive\\\\StockPi-InfoPanel-main\\\\kitchen_inventory\\\\app.py\" -Raw\\).Split\\(\"`n\"\\).Count)"
+    ]
+  }
+}

@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtualenv
+venv/
+.env
+
+# Databases / local data
+*.db
+*.sqlite
+*.sqlite3
+
+# Backups / editor saves
+*.bak
+*.save
+*.save.*
+*.tar.gz
+
+# OS junk
+.DS_Store
+
+# Local backups
+*.pre_alias_*
+*.broken_backup_*

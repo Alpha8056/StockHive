@@ -1,0 +1,139 @@
+<!doctype html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Resolve Barcode</title>
+  <style>
+    :root{
+      --bg: #0f1115; --panel: #151922; --panel2: #111520;
+      --text: #e7e9ee; --muted: #a8b0c2; --border: #2a3142;
+      --danger: #ff4d4d; --ok: #39d98a; --warn: #f7c948;
+      --btn: #1b2231; --btnHover: #232c3f; --input: #0f1420;
+      --shadow: rgba(0,0,0,0.35);
+    }
+    * { box-sizing: border-box; }
+    body { margin:0; background: radial-gradient(1200px 800px at 20% 0%, #151a25 0%, var(--bg) 45%, #0b0d12 100%); color: var(--text);
+           font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
+    .wrap{ min-height:100vh; display:flex; justify-content:center; padding:18px; }
+    .container{ width:100%; max-width:820px; }
+    header{ display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:14px; flex-wrap:wrap; }
+    h1{ font-size:28px; margin:0; }
+    .sub{ color:var(--muted); font-size:14px; }
+    .row{ margin:12px 0; }
+    .card{ background: linear-gradient(180deg,var(--panel) 0%,var(--panel2) 100%);
+           border:1px solid var(--border); border-radius:16px; padding:14px; margin:12px 0; box-shadow:0 10px 30px var(--shadow); }
+    .card h2{ margin:0 0 10px 0; font-size:18px; }
+    .status{ padding:10px 12px; border-radius:12px; border:1px solid var(--border); background:rgba(255,255,255,0.03);
+             margin:10px 0 14px 0; font-weight:800; }
+    .status.danger{ color:var(--danger); }
+    .chip{ display:inline-block; padding:7px 11px; border:1px solid var(--border); border-radius:999px;
+           background:rgba(255,255,255,0.03); margin-left:8px; font-size:14px; }
+    .muted{ color:var(--muted); font-size:14px; }
+    .btn{ appearance:none; border:1px solid var(--border); background:var(--btn); color:var(--text);
+          padding:12px 14px; border-radius:14px; font-size:16px; cursor:pointer; text-decoration:none;
+          display:inline-flex; align-items:center; justify-content:center; gap:8px;
+          transition:transform .05s ease, background .15s ease, border-color .15s ease; }
+    .btn:hover{ background:var(--btnHover); border-color:#39425a; } .btn:active{ transform: translateY(1px); }
+    .btn-wide{ width:220px; max-width:100%; }
+    .btn-danger{ border-color: rgba(255,77,77,0.35); background: rgba(255,77,77,0.10); }
+    .btn-danger:hover{ background: rgba(255,77,77,0.16); border-color: rgba(255,77,77,0.55); }
+    .btn-warn{ border-color: rgba(247,201,72,0.35); background: rgba(247,201,72,0.10); }
+    .btn-warn:hover{ background: rgba(247,201,72,0.16); border-color: rgba(247,201,72,0.55); }
+    .fieldRow{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    input[type=text]{ width:min(520px,100%); font-size:18px; padding:12px; border-radius:14px; border:1px solid var(--border);
+                      background:var(--input); color:var(--text); outline:none; }
+    input[type=text]:focus{ border-color: rgba(90,162,255,0.6); box-shadow:0 0 0 3px rgba(90,162,255,0.18); }
+    select{ width:min(520px,100%); font-size:16px; padding:10px 12px; border-radius:12px; border:1px solid var(--border);
+            background:var(--input); color:var(--text); outline:none; }
+    select:focus{ border-color: rgba(90,162,255,0.6); box-shadow:0 0 0 3px rgba(90,162,255,0.18); }
+    hr{ border:none; border-top:1px solid var(--border); margin:14px 0; }
+    .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+    .twoCol{ display:grid; grid-template-columns: 1fr; gap:12px; }
+    @media (min-width: 860px){
+      .twoCol{ grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap"><div class="container">
+    <header>
+      <div>
+        <h1>Resolve Barcode</h1>
+        <div class="sub">Link this barcode to an existing item OR create a new item</div>
+      </div>
+      <a class="btn" href="/?zone={{ zone|urlencode }}&shelf={{ shelf }}">Back</a>
+    </header>
+
+    {% if error %}
+      <div class="status danger">{{ error }}</div>
+    {% endif %}
+
+    <div class="card">
+      <h2>Scanned</h2>
+      <div class="row muted">
+        Barcode <span class="chip mono">{{ barcode }}</span>
+      </div>
+      <div class="row muted">
+        Current location <span class="chip">{{ location }}</span>
+      </div>
+      <div class="muted">If the same product sometimes scans different barcodes, use “Link to existing item.”</div>
+    </div>
+
+    <div class="twoCol">
+      <div class="card">
+        <h2>Link to existing item (recommended)</h2>
+        <div class="muted">This prevents duplicates. Future scans of this barcode will count toward the linked item.</div>
+
+        <form method="post" action="/resolve_barcode?zone={{ zone|urlencode }}&shelf={{ shelf }}">
+          <input type="hidden" name="barcode" value="{{ barcode }}">
+          <input type="hidden" name="action" value="alias">
+
+          <div class="row">
+            <select name="canonical_barcode" required>
+              <option value="" selected disabled>Pick an existing item…</option>
+              {% for r in items %}
+                <option value="{{ r[0] }}">{{ r[1] }} — ({{ r[0] }})</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="fieldRow">
+            <button class="btn btn-wide btn-warn" type="submit">Link + Add (+1)</button>
+            <a class="btn" href="/?zone={{ zone|urlencode }}&shelf={{ shelf }}">Cancel</a>
+          </div>
+        </form>
+
+        <hr>
+        <div class="muted">Tip: Pick the item name you already have in Inventory. The barcode you scanned becomes an alias.</div>
+      </div>
+
+      <div class="card">
+        <h2>Create as new item</h2>
+        <div class="muted">Use this only if it’s truly a different product.</div>
+
+        <form method="post" action="/resolve_barcode?zone={{ zone|urlencode }}&shelf={{ shelf }}">
+          <input type="hidden" name="barcode" value="{{ barcode }}">
+          <input type="hidden" name="action" value="new">
+
+          <div class="row">
+            <input type="text" name="name" placeholder="Item name" value="" autofocus required>
+          </div>
+
+          <div class="row">
+            <input type="text" name="location" placeholder="Location" value="{{ location }}" required>
+          </div>
+
+          <div class="fieldRow">
+            <button class="btn btn-wide" type="submit">Create + Add (+1)</button>
+            <a class="btn" href="/?zone={{ zone|urlencode }}&shelf={{ shelf }}">Cancel</a>
+          </div>
+        </form>
+
+        <hr>
+        <div class="muted">If you create duplicates by accident, you can delete the duplicate item later and keep the linked one.</div>
+      </div>
+    </div>
+
+  </div></div>
+</body>
+</html>
