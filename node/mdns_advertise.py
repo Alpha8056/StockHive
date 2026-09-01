@@ -92,11 +92,20 @@ class _LauncherListener(ServiceListener):
 
 
 def start(port: int) -> None:
-    """Register this node on mDNS and start browsing for the launcher.
-    Safe to call once at app startup; failures here should never stop
-    the app from serving inventory pages (e.g. mDNS blocked/unavailable).
+    """Kicks off mDNS setup in a background thread and returns immediately.
 
-    Advertising ourselves and browsing for the launcher are independent
+    This used to run synchronously at import time, which meant gunicorn
+    couldn't finish booting the worker (and the app couldn't serve any
+    page at all, including plain inventory scanning) until mDNS
+    registration finished. zc.register_service() normally takes under a
+    second, but if it ever hangs for any reason, that used to take the
+    entire app down with it — mDNS should never be able to block the app
+    from serving its actual job."""
+    threading.Thread(target=_start_mdns, args=(port,), daemon=True).start()
+
+
+def _start_mdns(port: int) -> None:
+    """Advertising ourselves and browsing for the launcher are independent
     operations, each in their own try/except — previously they shared one
     try block, so if register_service() ever raised (e.g. a leftover
     registration from a killed/restarted worker), the ServiceBrowser for

@@ -111,21 +111,29 @@ def _sweep_stale_nodes() -> None:
 
 
 def start(launcher_port: int) -> None:
-    """Start browsing for nodes and advertising the launcher itself.
+    """Kicks off mDNS setup in a background thread and returns immediately.
 
-    These are two independent mDNS operations, each in its own
-    try/except — previously one shared try block meant a failure
-    registering the launcher's own service (e.g. a leftover registration
-    from a killed/restarted worker) would also silently skip starting the
-    node browser, or vice versa."""
-    global _zc
+    This used to run synchronously at import time, which meant gunicorn
+    couldn't finish booting the worker (and the app couldn't serve any
+    HTTP requests at all) until mDNS registration finished. zc.register_
+    service() normally takes under a second, but if it ever hangs for any
+    reason, that used to take the entire app down with it. mDNS should
+    never be able to block HTTP serving, so it now runs off-thread."""
     nodes_db.init_db()
+    threading.Thread(target=_start_mdns, args=(launcher_port,), daemon=True).start()
+    threading.Thread(target=_sweep_loop, daemon=True).start()
 
+
+def _start_mdns(launcher_port: int) -> None:
+    """Two independent mDNS operations, each in its own try/except — a
+    failure registering the launcher's own service (e.g. a leftover
+    registration from a killed/restarted worker) shouldn't also silently
+    skip starting the node browser, or vice versa."""
+    global _zc
     try:
         _zc = Zeroconf()
     except Exception as e:
         print("[discovery] Failed to start Zeroconf:", e)
-        threading.Thread(target=_sweep_loop, daemon=True).start()
         return
 
     # Without an explicit close(), zeroconf's background socket thread can
@@ -155,8 +163,6 @@ def start(launcher_port: int) -> None:
         _zc.register_service(_launcher_service_info)
     except Exception as e:
         print("[discovery] Failed to advertise the launcher itself:", e)
-
-    threading.Thread(target=_sweep_loop, daemon=True).start()
 
 
 def get_debug_state() -> dict:
