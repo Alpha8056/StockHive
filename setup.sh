@@ -214,14 +214,22 @@ EOF
   success "stockpi-launcher.service installed and started on port $LAUNCHER_PORT."
 }
 
+# This script assumes it owns nginx on this machine (a dedicated
+# node/launcher Pi) — clear out any other enabled sites first. Without
+# this, a leftover site from an older install (e.g. a Pi that used to run
+# v1) can conflict with our own (both declaring `default_server` on the
+# same port), nginx's config test fails, and — critically — everything
+# below used to hide that failure and just leave nginx silently serving
+# whatever was already loaded, with no indication anything was wrong.
+rm -f /etc/nginx/sites-enabled/*
+
 $INSTALL_NODE && install_node
 $INSTALL_LAUNCHER && install_launcher
 
-# nginx only needs one enabled "default" site per port; both configs above
-# already declare their own listen port, so it's safe to reload with both
-# (or either) in place.
-rm -f /etc/nginx/sites-enabled/default
-nginx -t > /dev/null 2>&1 && systemctl restart nginx
+if ! nginx -t; then
+  error "nginx config test failed (see above) — nginx was NOT reloaded, so it may still be serving old content. Fix the error and run: sudo systemctl restart nginx"
+fi
+systemctl restart nginx
 success "nginx configured and restarted."
 
 # =============================================================================
