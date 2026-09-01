@@ -1473,7 +1473,10 @@ def restore_db():
     if not f:
         return redirect("/tools?msgtype=danger&msg=No%20file%20selected")
 
-    f.save(UPLOAD_TMP)
+    try:
+        f.save(UPLOAD_TMP)
+    except Exception:
+        return redirect("/tools?msgtype=danger&msg=Upload%20failed")
 
     try:
         if os.path.getsize(UPLOAD_TMP) < 1000:
@@ -1485,10 +1488,16 @@ def restore_db():
     try:
         shutil.copy2(UPLOAD_TMP, DB_PATH)
         os.remove(UPLOAD_TMP)
+        # A backup from an older install can be missing tables/columns
+        # this version added (e.g. node_settings) — every page reads from
+        # those on every request, so re-running the migration immediately
+        # (instead of only at next process start) keeps the app from
+        # 500ing on the very next page load after a restore.
+        _db.init_db()
     except Exception:
         return redirect("/tools?msgtype=danger&msg=Restore%20failed")
 
-    return redirect("/tools?msgtype=ok&msg=Restore%20complete%20-%20restart%20the%20app")
+    return redirect("/tools?msgtype=ok&msg=Restore%20complete")
 
 
 # ============================================================
