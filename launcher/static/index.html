@@ -30,11 +30,9 @@ body{
 }
 .wrap{ max-width:1200px; margin:0 auto; padding:22px 18px 60px; }
 
-.topbar{ display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:22px; flex-wrap:wrap; }
+.topbar{ display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:8px; flex-wrap:wrap; }
 .brand{ font-size:26px; font-weight:900; letter-spacing:.3px; }
 .brand small{ font-size:13px; font-weight:400; color:var(--muted); margin-left:8px; }
-.clock{ text-align:right; color:var(--muted); font-size:14px; }
-.clock b{ color:var(--text); font-size:20px; font-weight:800; }
 
 .settingsBtn{
   padding:10px 16px; border-radius:12px; background:var(--btn); border:1px solid var(--border);
@@ -42,7 +40,12 @@ body{
 }
 .settingsBtn:hover{ background:var(--btnHover); }
 
-.searchRow{ margin-bottom:20px; }
+.clockBlock{ text-align:center; margin:10px 0 28px; }
+.clockBlock .time{ font-size:48px; font-weight:900; letter-spacing:.5px; line-height:1; }
+.clockBlock .date{ margin-top:6px; font-size:17px; font-weight:700; color:var(--muted); }
+@media (max-width:560px){ .clockBlock .time{ font-size:38px; } }
+
+.searchRow{ margin-bottom:20px; text-align:center; }
 #search{
   width:100%; max-width:420px; padding:12px 16px; border-radius:14px; border:1px solid var(--border);
   background:rgba(17,24,38,.5); color:var(--text); font-size:15px; outline:none;
@@ -118,8 +121,12 @@ body{
 
   <div class="topbar">
     <div class="brand">StockHive<small>launcher</small></div>
-    <div class="clock"><b id="time">--:--</b><br><span id="date">---</span></div>
     <a class="settingsBtn" href="/settings">⚙ Settings</a>
+  </div>
+
+  <div class="clockBlock">
+    <div class="time" id="time">--:--</div>
+    <div class="date" id="date">---</div>
   </div>
 
   <div class="searchRow">

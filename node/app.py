@@ -64,6 +64,7 @@ from inventory import (
     get_low_stock,
     get_item_stats,
     get_event_log,
+    to_local_display,
 
     # Locations
     get_locations,
@@ -1510,7 +1511,7 @@ def debug_events():
     rows = ""
     events = get_event_log(limit_i)
     for e in events:
-        created_at = e["created_at"]
+        created_at = to_local_display(e["created_at"])
         barcode = e["barcode"]
         etype = e["event_type"]
         delta = e["delta"]
@@ -1766,7 +1767,7 @@ def export_events_txt():
     lines.append("--------------------------------------")
 
     for e in events:
-        lines.append(f"{e['created_at']} | {e['barcode']} | {e['event_type']} | {e['delta']} | {e['source']}")
+        lines.append(f"{to_local_display(e['created_at'])} | {e['barcode']} | {e['event_type']} | {e['delta']} | {e['source']}")
 
     content = "\n".join(lines) + "\n"
 
@@ -1810,7 +1811,7 @@ def export_events_raw():
     lines.append("--------------------------------------")
 
     for e in events:
-        lines.append(f"{e['created_at']} | {e['barcode']} | {e['event_type']} | {e['delta']} | {e['source']}")
+        lines.append(f"{to_local_display(e['created_at'])} | {e['barcode']} | {e['event_type']} | {e['delta']} | {e['source']}")
 
     content = "\n".join(lines) + "\n"
     return Response(content, mimetype="text/plain")

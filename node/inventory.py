@@ -10,7 +10,7 @@
 # ============================================================
 import os
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # ============================================================
 # SECTION: Paths / DB
@@ -96,6 +96,25 @@ def _connect():
 
 def _now_utc_iso():
     return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def to_local_display(utc_str: str) -> str:
+    """
+    Event timestamps are stored in UTC (both event_log's own writes and
+    SQLite's CURRENT_TIMESTAMP default are UTC, regardless of the system's
+    configured timezone) so day-range comparisons stay unambiguous. This
+    converts one back to the system's local timezone for display only —
+    it defers to whatever timezone the OS is configured with (TZ /
+    /etc/localtime), so setting the Pi's timezone correctly is what
+    controls the actual displayed time.
+    """
+    if not utc_str:
+        return utc_str
+    try:
+        dt = datetime.strptime(utc_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        return dt.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return utc_str
 
 
 # ============================================================

@@ -38,12 +38,6 @@ def _local_ip() -> str:
 
 
 class _NodeListener(ServiceListener):
-    def __init__(self):
-        # mDNS gives us only the instance name on removal, not the TXT
-        # record, so remember name -> node_id from add/update to mark the
-        # right row offline immediately instead of waiting on the sweep.
-        self._name_to_id = {}
-
     def add_service(self, zc, type_, name):
         self._upsert(zc, type_, name)
 
@@ -51,9 +45,13 @@ class _NodeListener(ServiceListener):
         self._upsert(zc, type_, name)
 
     def remove_service(self, zc, type_, name):
-        node_id = self._name_to_id.pop(name, None)
-        if node_id:
-            nodes_db.mark_offline(node_id)
+        # An mDNS "goodbye" (or a cache entry simply expiring) doesn't
+        # reliably mean the node is actually down — a single missed
+        # multicast packet triggers this too, and was causing nodes to
+        # grey out on the grid while still being perfectly reachable.
+        # Leave the offline decision to the sweep below, which confirms
+        # with a real TCP connect before believing it.
+        pass
 
     def _upsert(self, zc, type_, name):
         info = zc.get_service_info(type_, name)
@@ -66,17 +64,45 @@ class _NodeListener(ServiceListener):
         label = props.get("label") or "StockPi Node"
         theme = props.get("theme") or "dark"
         ip = socket.inet_ntoa(info.addresses[0])
-        self._name_to_id[name] = node_id
         nodes_db.upsert_online(node_id, label, theme, ip, info.port)
+
+
+def _is_reachable(ip: str, port: int, timeout: float = 2.0) -> bool:
+    if not ip or not port:
+        return False
+    try:
+        with socket.create_connection((ip, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
 
 
 def _sweep_loop():
     while True:
         time.sleep(SWEEP_INTERVAL_SECONDS)
         try:
-            nodes_db.sweep_stale(STALE_TIMEOUT_SECONDS)
+            _sweep_stale_nodes()
         except Exception as e:
             print("[discovery] sweep error:", e)
+
+
+def _sweep_stale_nodes() -> None:
+    """
+    A node whose mDNS record hasn't refreshed in a while might just be a
+    quiet network moment, not an actual outage — mDNS is UDP/multicast and
+    drops packets. Before greying a tile out, double-check with a real TCP
+    connect to its last-known address; only mark it offline if that also
+    fails. If it's still reachable, bump last_seen so the sweep doesn't
+    immediately re-flag it next tick.
+    """
+    cutoff = int(time.time()) - STALE_TIMEOUT_SECONDS
+    for row in nodes_db.list_nodes(include_deleted=False):
+        if not row["is_online"] or not row["last_seen"] or row["last_seen"] >= cutoff:
+            continue
+        if _is_reachable(row.get("ip"), row.get("port")):
+            nodes_db.touch_last_seen(row["id"])
+        else:
+            nodes_db.mark_offline(row["id"])
 
 
 def start(launcher_port: int) -> None:

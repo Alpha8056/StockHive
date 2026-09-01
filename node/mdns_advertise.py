@@ -63,9 +63,13 @@ class _LauncherListener(ServiceListener):
         self._update(zc, type_, name)
 
     def remove_service(self, zc, type_, name):
-        global _discovered_launcher_url
-        with _lock:
-            _discovered_launcher_url = None
+        # mDNS "goodbye" / cache-expiry events are common and don't
+        # reliably mean the launcher is actually gone (a single missed
+        # multicast packet triggers this too) — keep the last known URL
+        # rather than dropping the back-button link on every blip. If the
+        # launcher really did move, the next add_service/update_service
+        # overwrites this with the new address.
+        pass
 
     def _update(self, zc, type_, name):
         global _discovered_launcher_url

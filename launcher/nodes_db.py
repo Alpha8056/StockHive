@@ -72,16 +72,13 @@ def mark_offline(node_id: str) -> None:
         conn.close()
 
 
-def sweep_stale(timeout_seconds: int) -> None:
-    """Mark any node offline whose last_seen is older than timeout_seconds,
-    to catch cases where an mDNS goodbye packet was missed."""
-    cutoff = int(time.time()) - timeout_seconds
+def touch_last_seen(node_id: str) -> None:
+    """Bumps last_seen without needing a fresh mDNS record — used when the
+    sweep's active reachability check confirms a node with a stale mDNS
+    record is still actually up, so it isn't re-checked every tick."""
     conn = _connect()
     try:
-        conn.execute("""
-            UPDATE nodes SET is_online = 0, offline_since = ?
-            WHERE is_online = 1 AND last_seen < ?;
-        """, (int(time.time()), cutoff))
+        conn.execute("UPDATE nodes SET last_seen = ? WHERE id = ?;", (int(time.time()), node_id))
         conn.commit()
     finally:
         conn.close()
