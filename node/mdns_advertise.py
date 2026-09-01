@@ -84,16 +84,32 @@ class _LauncherListener(ServiceListener):
 def start(port: int) -> None:
     """Register this node on mDNS and start browsing for the launcher.
     Safe to call once at app startup; failures here should never stop
-    the app from serving inventory pages (e.g. mDNS blocked/unavailable)."""
+    the app from serving inventory pages (e.g. mDNS blocked/unavailable).
+
+    Advertising ourselves and browsing for the launcher are independent
+    operations, each in their own try/except — previously they shared one
+    try block, so if register_service() ever raised (e.g. a leftover
+    registration from a killed/restarted worker), the ServiceBrowser for
+    the launcher never even got created, and the "Apps" link would stay
+    broken until the process restarted cleanly."""
     global _zc, _service_info, _registered_port
     try:
         _zc = Zeroconf()
+    except Exception as e:
+        print("[mDNS] Failed to start Zeroconf:", e)
+        return
+
+    try:
         _service_info = _build_service_info(port)
         _registered_port = port
         _zc.register_service(_service_info)
+    except Exception as e:
+        print("[mDNS] Failed to advertise this node:", e)
+
+    try:
         ServiceBrowser(_zc, LAUNCHER_SERVICE_TYPE, _LauncherListener())
     except Exception as e:
-        print("[mDNS] Failed to start advertising:", e)
+        print("[mDNS] Failed to start browsing for the launcher:", e)
 
 
 def refresh() -> None:

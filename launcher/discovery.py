@@ -106,13 +106,29 @@ def _sweep_stale_nodes() -> None:
 
 
 def start(launcher_port: int) -> None:
-    """Start browsing for nodes and advertising the launcher itself."""
+    """Start browsing for nodes and advertising the launcher itself.
+
+    These are two independent mDNS operations, each in its own
+    try/except — previously one shared try block meant a failure
+    registering the launcher's own service (e.g. a leftover registration
+    from a killed/restarted worker) would also silently skip starting the
+    node browser, or vice versa."""
     global _zc
     nodes_db.init_db()
+
     try:
         _zc = Zeroconf()
-        ServiceBrowser(_zc, NODE_SERVICE_TYPE, _NodeListener())
+    except Exception as e:
+        print("[discovery] Failed to start Zeroconf:", e)
+        threading.Thread(target=_sweep_loop, daemon=True).start()
+        return
 
+    try:
+        ServiceBrowser(_zc, NODE_SERVICE_TYPE, _NodeListener())
+    except Exception as e:
+        print("[discovery] Failed to start browsing for nodes:", e)
+
+    try:
         launcher_info = ServiceInfo(
             LAUNCHER_SERVICE_TYPE,
             f"stockpi-launcher.{LAUNCHER_SERVICE_TYPE}",
@@ -123,6 +139,6 @@ def start(launcher_port: int) -> None:
         )
         _zc.register_service(launcher_info)
     except Exception as e:
-        print("[discovery] Failed to start mDNS:", e)
+        print("[discovery] Failed to advertise the launcher itself:", e)
 
     threading.Thread(target=_sweep_loop, daemon=True).start()
