@@ -1,4 +1,5 @@
 # StockHive
+Stable: abfc566d5132dee01353ba6cebba740d4deeae46
 
 Multi-instance inventory system for Raspberry Pi. Run a separate StockPi
 **node** on each Pi — Kitchen, Tote Storage, Electronic Components, whatever
