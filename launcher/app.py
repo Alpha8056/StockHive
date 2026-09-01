@@ -211,6 +211,11 @@ def api_delete_node(node_id):
     return jsonify({"ok": True})
 
 
+@app.get("/debug/mdns")
+def debug_mdns():
+    return jsonify(discovery.get_debug_state())
+
+
 # ============================================================
 # SECTION: Pages
 # ============================================================

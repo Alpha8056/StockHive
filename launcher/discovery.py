@@ -24,6 +24,7 @@ STALE_TIMEOUT_SECONDS = 180
 SWEEP_INTERVAL_SECONDS = 60
 
 _zc = None
+_launcher_service_info = None
 
 
 def _local_ip() -> str:
@@ -128,8 +129,9 @@ def start(launcher_port: int) -> None:
     except Exception as e:
         print("[discovery] Failed to start browsing for nodes:", e)
 
+    global _launcher_service_info
     try:
-        launcher_info = ServiceInfo(
+        _launcher_service_info = ServiceInfo(
             LAUNCHER_SERVICE_TYPE,
             f"stockpi-launcher.{LAUNCHER_SERVICE_TYPE}",
             addresses=[socket.inet_aton(_local_ip())],
@@ -137,8 +139,38 @@ def start(launcher_port: int) -> None:
             properties={"version": VERSION},
             server=f"{socket.gethostname()}.local.",
         )
-        _zc.register_service(launcher_info)
+        _zc.register_service(_launcher_service_info)
     except Exception as e:
         print("[discovery] Failed to advertise the launcher itself:", e)
 
     threading.Thread(target=_sweep_loop, daemon=True).start()
+
+
+def get_debug_state() -> dict:
+    """
+    Diagnostic snapshot of this process's own mDNS state — used to tell
+    apart 'we never actually registered anything' from 'we registered
+    fine locally, but the announcement isn't reaching the network' (the
+    latter points at a firewall/interface/multicast issue in this
+    container rather than a code bug).
+    """
+    state = {
+        "zeroconf_running": _zc is not None,
+        "advertised_ip": _local_ip(),
+        "attempted_registration": None,
+        "self_lookup_succeeded": None,
+        "known_nodes": nodes_db.list_nodes(include_deleted=False),
+    }
+    if _launcher_service_info is not None:
+        state["attempted_registration"] = {
+            "name": _launcher_service_info.name,
+            "port": _launcher_service_info.port,
+            "addresses": _launcher_service_info.parsed_addresses(),
+        }
+        if _zc is not None:
+            try:
+                info = _zc.get_service_info(LAUNCHER_SERVICE_TYPE, _launcher_service_info.name, timeout=3000)
+                state["self_lookup_succeeded"] = info is not None
+            except Exception as e:
+                state["self_lookup_succeeded"] = f"error: {e}"
+    return state
