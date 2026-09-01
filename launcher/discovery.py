@@ -5,6 +5,7 @@
 # (_stockhive._tcp.local.) so nodes can find their way back.
 # ============================================================
 
+import atexit
 import socket
 import threading
 import time
@@ -126,6 +127,13 @@ def start(launcher_port: int) -> None:
         print("[discovery] Failed to start Zeroconf:", e)
         threading.Thread(target=_sweep_loop, daemon=True).start()
         return
+
+    # Without an explicit close(), zeroconf's background socket thread can
+    # occasionally hold gunicorn's worker process open past its graceful
+    # shutdown window on `systemctl restart`, leaving nginx with nothing
+    # to proxy to for a stretch (seen as a 504). atexit fires during
+    # gunicorn's normal clean-shutdown path on SIGTERM.
+    atexit.register(_zc.close)
 
     try:
         ServiceBrowser(_zc, NODE_SERVICE_TYPE, _NodeListener())

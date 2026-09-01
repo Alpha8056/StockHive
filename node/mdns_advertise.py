@@ -6,6 +6,7 @@
 # "back to launcher" link without any manual IP entry.
 # ============================================================
 
+import atexit
 import socket
 import threading
 
@@ -107,6 +108,12 @@ def start(port: int) -> None:
     except Exception as e:
         print("[mDNS] Failed to start Zeroconf:", e)
         return
+
+    # Without an explicit close(), zeroconf's background socket thread can
+    # occasionally hold gunicorn's worker process open past its graceful
+    # shutdown window on `systemctl restart`. atexit fires during
+    # gunicorn's normal clean-shutdown path on SIGTERM.
+    atexit.register(_zc.close)
 
     try:
         _service_info = _build_service_info(port)
