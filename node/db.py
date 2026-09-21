@@ -227,6 +227,9 @@ def _migrate(conn):
     # Ensure expiration date column exists
     _ensure_column(conn, "items", "expiration_date", "expiration_date TEXT")
 
+    # Ensure dismissed-expiration-alert flag exists
+    _ensure_column(conn, "items", "dismissed_expiration", "dismissed_expiration INTEGER NOT NULL DEFAULT 0")
+
     # Ensure events table exists
     _ensure_events_table(conn)
 

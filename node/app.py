@@ -46,6 +46,8 @@ from inventory import (
     # Barcode alias support
     resolve_barcode,
     add_barcode_alias,
+    get_aliases_for_barcode,
+    remove_barcode_alias,
 
     # Inventory / Grocery
     get_item_by_barcode,
@@ -61,6 +63,8 @@ from inventory import (
     update_item_name,
     update_item_expiration,
     get_expiring_items,
+    get_dismissed_expiring_items,
+    set_expiration_dismissed,
 
     # Smart / Debug
     set_low_threshold,
@@ -297,12 +301,14 @@ def _get_kitchen_theme():
 
 def _styles():
     t = _get_kitchen_theme()
+    color_scheme = "light" if labels.get_theme() == "light" else "dark"
     root_block = (
         f"--bg:{t['bg']};--panel:{t['panel']};--panel2:{t['panel2']};"
         f"--text:{t['text']};--muted:{t['muted']};--border:{t['border']};"
         f"--danger:#ff4d4d;--ok:#39d98a;--warn:#f7c948;"
         f"--btn:{t['btn']};--btnHover:{t['btnHover']};--input:{t['input']};"
         f"--shadow:{t['shadow']};"
+        f"color-scheme:{color_scheme};"
     )
     return """
     <style>
@@ -344,6 +350,11 @@ def _styles():
       select, input[type=number]{ font-size:16px; padding:10px 12px; border-radius:12px; border:1px solid var(--border);
               background:var(--input); color:var(--text); outline:none; }
       select:focus, input[type=number]:focus{ border-color: rgba(90,162,255,0.6); box-shadow:0 0 0 3px rgba(90,162,255,0.18); }
+      input[type=date]{ font-size:16px; padding:10px 12px; border-radius:12px; border:1px solid var(--border);
+              background:var(--input); color:var(--text); outline:none; width:min(240px,100%); }
+      input[type=date]:focus{ border-color: rgba(90,162,255,0.6); box-shadow:0 0 0 3px rgba(90,162,255,0.18); }
+      input[type=date]::-webkit-calendar-picker-indicator{ cursor:pointer; border-radius:6px; padding:4px;
+              filter: """ + ("none" if color_scheme == "light" else "invert(0.85)") + """; }
       table{ width:100%; border-collapse:collapse; border:1px solid var(--border); background:rgba(255,255,255,0.02);
              border-radius:14px; overflow:hidden; }
       th,td{ padding:10px; border-bottom:1px solid var(--border); }
@@ -722,13 +733,20 @@ def resolve_barcode_page():
 
         elif action == "new":
             name = (request.form.get("name") or "").strip()
-            new_location = (request.form.get("location") or location).strip()
+            new_zone = (request.form.get("zone") or zone).strip()
+            if new_zone not in loc_map:
+                new_zone = zone
+            try:
+                new_shelf = int(request.form.get("shelf", shelf))
+            except Exception:
+                new_shelf = shelf
+            if new_shelf not in SHELVES:
+                new_shelf = shelf
+            new_location = _build_location(new_zone, new_shelf, loc_map)
             expiration_date = (request.form.get("expiration_date") or "").strip()
 
             if not name:
                 error = "Name is required."
-            elif not new_location:
-                error = "Location is required."
             else:
                 try:
                     add_item(barcode, name, new_location)
@@ -747,6 +765,8 @@ def resolve_barcode_page():
         zone=zone,
         shelf=shelf,
         location=location,
+        locations=get_locations(),
+        shelves=SHELVES,
     )
 
 
@@ -1043,6 +1063,22 @@ def edit_item_page():
         return redirect("/inventory?msgtype=danger&msg=Item%20not%20found")
     _, name, location, qty, low, expiration_date = item
     status_html = _page_status_html()
+
+    aliases = get_aliases_for_barcode(barcode)
+    alias_rows = "".join(
+        f"""
+        <div class="fieldRow" style="margin-top:8px;">
+          <span class="chip mono">{a}</span>
+          <form class="inline" method="post" action="/edit/alias-remove">
+            <input type="hidden" name="barcode" value="{barcode}">
+            <input type="hidden" name="alias" value="{a}">
+            <button class="btn btn-danger" type="submit" title="Unlink this barcode">Remove</button>
+          </form>
+        </div>
+        """
+        for a in aliases
+    ) or "<div class='muted'>No other barcodes linked yet.</div>"
+
     return f"""
     {_styles()}{_auto_hide_banner_js()}
     <div class="wrap"><div class="container">
@@ -1072,8 +1108,45 @@ def edit_item_page():
           <div class="muted" style="margin-top:10px;">Barcode: <span class="chip mono">{barcode}</span> &nbsp; Location: <span class="chip">{location}</span></div>
         </form>
       </div>
+
+      <div class="card">
+        <h2>Other Barcodes</h2>
+        <div class="muted">Other barcodes that count as this item — useful when the same product scans differently from different angles/labels (e.g. UPC vs. EAN), or a resealed/relabeled version.</div>
+        {alias_rows}
+        <form method="post" action="/edit/alias-add" style="margin-top:14px;">
+          <input type="hidden" name="barcode" value="{barcode}">
+          <div class="fieldRow">
+            <input type="text" name="alias" placeholder="Barcode to link" required>
+            <button class="btn btn-warn" type="submit">Link Barcode</button>
+          </div>
+        </form>
+      </div>
     </div></div>
     """
+
+
+@app.route("/edit/alias-add", methods=["POST"])
+def edit_alias_add():
+    barcode = (request.form.get("barcode", "") or "").strip()
+    alias = (request.form.get("alias", "") or "").strip()
+    if not barcode or not alias:
+        return redirect(f"/edit?barcode={barcode}&msgtype=danger&msg=Barcode%20required")
+    try:
+        add_barcode_alias(alias, barcode)
+        return redirect(f"/edit?barcode={barcode}&msgtype=ok&msg=Linked%20{alias}")
+    except Exception as e:
+        return redirect(f"/edit?barcode={barcode}&msgtype=danger&msg={quote(str(e))}")
+
+
+@app.route("/edit/alias-remove", methods=["POST"])
+def edit_alias_remove():
+    barcode = (request.form.get("barcode", "") or "").strip()
+    alias = (request.form.get("alias", "") or "").strip()
+    try:
+        remove_barcode_alias(alias)
+        return redirect(f"/edit?barcode={barcode}&msgtype=ok&msg=Unlinked%20{alias}")
+    except Exception as e:
+        return redirect(f"/edit?barcode={barcode}&msgtype=danger&msg={quote(str(e))}")
 
 
 @app.route("/edit-save", methods=["POST"])
@@ -1273,9 +1346,34 @@ def expiring_page():
           <td>{int(qty)}</td>
           <td>{expiration_date}</td>
           <td><span class="{cls}">{label}</span></td>
-          <td><a class="btn" href="/edit?barcode={barcode}">Edit</a></td>
+          <td>
+            <a class="btn" href="/edit?barcode={barcode}">Edit</a>
+            <form class="inline" method="post" action="/expiring/dismiss">
+              <input type="hidden" name="barcode" value="{barcode}">
+              <button class="btn btn-warn" type="submit" title="Hide this item's expiration alert until its date changes">Dismiss</button>
+            </form>
+          </td>
         </tr>
         """
+
+    dismissed = get_dismissed_expiring_items()
+    dismissed_rows = "".join(
+        f"""
+        <tr>
+          <td>{name}</td>
+          <td>{location}</td>
+          <td>{int(qty)}</td>
+          <td>{expiration_date}</td>
+          <td>
+            <form class="inline" method="post" action="/expiring/undismiss">
+              <input type="hidden" name="barcode" value="{barcode}">
+              <button class="btn" type="submit">Undismiss</button>
+            </form>
+          </td>
+        </tr>
+        """
+        for barcode, name, location, qty, expiration_date in dismissed
+    )
 
     return f"""
     {_styles()}{_auto_hide_banner_js()}
@@ -1293,8 +1391,39 @@ def expiring_page():
           {rows if rows else "<tr><td colspan='6' class='muted'>Nothing expiring soon.</td></tr>"}
         </table>
       </div>
+
+      {"" if not dismissed_rows else f'''
+      <div class="card">
+        <h2>Dismissed</h2>
+        <div class="muted">Alerts you've hidden. Changing an item's expiration date also un-dismisses it automatically.</div>
+        <table style="margin-top:10px;">
+          <tr><th>Item</th><th>Location</th><th>Qty</th><th>Date</th><th></th></tr>
+          {dismissed_rows}
+        </table>
+      </div>
+      '''}
     </div></div>
     """
+
+
+@app.route("/expiring/dismiss", methods=["POST"])
+def expiring_dismiss():
+    barcode = (request.form.get("barcode", "") or "").strip()
+    try:
+        set_expiration_dismissed(barcode, True)
+    except Exception:
+        pass
+    return redirect("/expiring?msgtype=ok&msg=Alert%20dismissed")
+
+
+@app.route("/expiring/undismiss", methods=["POST"])
+def expiring_undismiss():
+    barcode = (request.form.get("barcode", "") or "").strip()
+    try:
+        set_expiration_dismissed(barcode, False)
+    except Exception:
+        pass
+    return redirect("/expiring?msgtype=ok&msg=Alert%20restored")
 
 
 @app.route("/api/expiring-count")

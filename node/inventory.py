@@ -121,10 +121,28 @@ def to_local_display(utc_str: str) -> str:
 # SECTION: Barcode Alias Resolution
 # ============================================================
 
+def _barcode_variants(barcode: str):
+    """
+    Same physical product can scan as either a 12-digit UPC-A or the
+    equivalent 13-digit EAN-13 (EAN-13 is UPC-A with a leading zero) —
+    some packages carry both symbologies, and a scanner can pick up
+    whichever one it happens to focus on. Looking up all equivalent forms
+    means a product doesn't silently fail to match (and get treated as a
+    brand-new/unknown item) just because it scanned as the "other" form
+    than it was first added under.
+    """
+    variants = [barcode]
+    if len(barcode) == 13 and barcode.startswith("0"):
+        variants.append(barcode[1:])
+    elif len(barcode) == 12:
+        variants.append("0" + barcode)
+    return variants
+
+
 def resolve_barcode(barcode: str):
     """
     Returns canonical barcode from items table.
-    Checks:
+    Checks, across all UPC-A/EAN-13 equivalent forms of the scanned code:
       1) items.barcode == barcode
       2) barcode_aliases.barcode == barcode -> mapped item -> canonical barcode
 
@@ -137,26 +155,29 @@ def resolve_barcode(barcode: str):
     conn = _connect()
     try:
         cur = conn.cursor()
+        variants = _barcode_variants(barcode)
 
         # Direct hit
-        cur.execute("SELECT barcode FROM items WHERE barcode = ?;", (barcode,))
-        row = cur.fetchone()
-        if row:
-            return row["barcode"]
+        for v in variants:
+            cur.execute("SELECT barcode FROM items WHERE barcode = ?;", (v,))
+            row = cur.fetchone()
+            if row:
+                return row["barcode"]
 
         # Alias hit
-        cur.execute(
-            """
-            SELECT i.barcode AS barcode
-            FROM barcode_aliases a
-            JOIN items i ON i.id = a.item_id
-            WHERE a.barcode = ?;
-            """,
-            (barcode,),
-        )
-        row = cur.fetchone()
-        if row:
-            return row["barcode"]
+        for v in variants:
+            cur.execute(
+                """
+                SELECT i.barcode AS barcode
+                FROM barcode_aliases a
+                JOIN items i ON i.id = a.item_id
+                WHERE a.barcode = ?;
+                """,
+                (v,),
+            )
+            row = cur.fetchone()
+            if row:
+                return row["barcode"]
 
         return None
     finally:
@@ -229,6 +250,24 @@ def get_aliases_for_barcode(canonical_barcode: str):
         )
         rows = cur.fetchall()
         return [r["barcode"] for r in rows]
+    finally:
+        conn.close()
+
+
+def remove_barcode_alias(alias_barcode: str) -> None:
+    """Un-links an alias barcode. The canonical item and its history are
+    untouched; the alias barcode just goes back to being unrecognized."""
+    alias_barcode = (alias_barcode or "").strip()
+    if not alias_barcode:
+        raise ValueError("Barcode required")
+
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM barcode_aliases WHERE barcode = ?;", (alias_barcode,))
+        if cur.rowcount == 0:
+            raise ValueError("Alias not found")
+        conn.commit()
     finally:
         conn.close()
 
@@ -669,7 +708,9 @@ def update_item_expiration(barcode: str, expiration_date: str) -> None:
     try:
         cur = conn.cursor()
         cur.execute(
-            "UPDATE items SET expiration_date = ? WHERE barcode = ?;",
+            # A changed expiration date (including clearing it) means any
+            # earlier dismissal no longer applies to whatever's there now.
+            "UPDATE items SET expiration_date = ?, dismissed_expiration = 0 WHERE barcode = ?;",
             (expiration_date, barcode),
         )
         if cur.rowcount == 0:
@@ -684,7 +725,8 @@ def get_expiring_items(days_ahead=3):
     """
     Returns list of tuples (barcode, name, location, quantity, expiration_date)
     for items with an expiration date that has passed, is today, or falls
-    within `days_ahead` days from now. Ordered soonest/most-overdue first.
+    within `days_ahead` days from now, excluding ones whose alert has been
+    dismissed. Ordered soonest/most-overdue first.
     """
     try:
         days_ahead = int(days_ahead)
@@ -703,12 +745,62 @@ def get_expiring_items(days_ahead=3):
             WHERE expiration_date IS NOT NULL
               AND expiration_date != ''
               AND expiration_date <= ?
+              AND dismissed_expiration = 0
             ORDER BY expiration_date ASC;
             """,
             (cutoff,),
         )
         rows = cur.fetchall()
         return [(r["barcode"], r["name"], r["location"], r["quantity"], r["expiration_date"]) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_dismissed_expiring_items():
+    """
+    Items whose expiration alert was dismissed but still have a
+    past/near-term expiration date — surfaced so a dismissal can be
+    reviewed/undone later instead of disappearing for good.
+    """
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT barcode, name, location, quantity, expiration_date
+            FROM items
+            WHERE expiration_date IS NOT NULL
+              AND expiration_date != ''
+              AND dismissed_expiration = 1
+            ORDER BY expiration_date ASC;
+            """
+        )
+        rows = cur.fetchall()
+        return [(r["barcode"], r["name"], r["location"], r["quantity"], r["expiration_date"]) for r in rows]
+    finally:
+        conn.close()
+
+
+def set_expiration_dismissed(barcode: str, dismissed: bool) -> None:
+    barcode = (barcode or "").strip()
+    if not barcode:
+        raise ValueError("Barcode required")
+
+    canonical = resolve_barcode(barcode)
+    if canonical:
+        barcode = canonical
+
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE items SET dismissed_expiration = ? WHERE barcode = ?;",
+            (1 if dismissed else 0, barcode),
+        )
+        if cur.rowcount == 0:
+            raise ValueError("Item not found")
+        _log_event(cur, barcode, "dismiss_expiration" if dismissed else "undismiss_expiration", delta=0, source="ui")
+        conn.commit()
     finally:
         conn.close()
 

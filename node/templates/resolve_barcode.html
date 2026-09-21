@@ -10,6 +10,7 @@
       --danger: #ff4d4d; --ok: #39d98a; --warn: #f7c948;
       --btn: #1b2231; --btnHover: #232c3f; --input: #0f1420;
       --shadow: rgba(0,0,0,0.35);
+      color-scheme: dark;
     }
     * { box-sizing: border-box; }
     body { margin:0; background: radial-gradient(1200px 800px at 20% 0%, #151a25 0%, var(--bg) 45%, #0b0d12 100%); color: var(--text);
@@ -46,6 +47,10 @@
     select{ width:min(520px,100%); font-size:16px; padding:10px 12px; border-radius:12px; border:1px solid var(--border);
             background:var(--input); color:var(--text); outline:none; }
     select:focus{ border-color: rgba(90,162,255,0.6); box-shadow:0 0 0 3px rgba(90,162,255,0.18); }
+    input[type=date]{ font-size:16px; padding:10px 12px; border-radius:12px; border:1px solid var(--border);
+            background:var(--input); color:var(--text); outline:none; width:min(240px,100%); }
+    input[type=date]:focus{ border-color: rgba(90,162,255,0.6); box-shadow:0 0 0 3px rgba(90,162,255,0.18); }
+    input[type=date]::-webkit-calendar-picker-indicator{ cursor:pointer; border-radius:6px; padding:4px; filter:invert(0.85); }
     hr{ border:none; border-top:1px solid var(--border); margin:14px 0; }
     .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
     .twoCol{ display:grid; grid-template-columns: 1fr; gap:12px; }
@@ -111,7 +116,7 @@
         <h2>Create as new item</h2>
         <div class="muted">Use this only if it’s truly a different product.</div>
 
-        <form method="post" action="/resolve_barcode?zone={{ zone|urlencode }}&shelf={{ shelf }}">
+        <form method="post" action="/resolve_barcode?zone={{ zone|urlencode }}&shelf={{ shelf }}" id="newItemForm">
           <input type="hidden" name="barcode" value="{{ barcode }}">
           <input type="hidden" name="action" value="new">
 
@@ -119,8 +124,22 @@
             <input type="text" name="name" placeholder="Item name" value="" autofocus required>
           </div>
 
+          <div class="row fieldRow">
+            <select name="zone" id="newItemZone" required>
+              {% for loc in locations %}
+                <option value="{{ loc.name }}" data-has-shelves="{{ 1 if loc.has_shelves else 0 }}" {% if loc.name == zone %}selected{% endif %}>{{ loc.name }}</option>
+              {% endfor %}
+            </select>
+            <select name="shelf" id="newItemShelf">
+              {% for s in shelves %}
+                <option value="{{ s }}" {% if s == shelf %}selected{% endif %}>Shelf {{ s }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
           <div class="row">
-            <input type="text" name="location" placeholder="Location" value="{{ location }}" required>
+            <label class="muted" style="display:block;margin-bottom:6px;">Expiration date (optional)</label>
+            <input type="date" name="expiration_date" value="">
           </div>
 
           <div class="fieldRow">
@@ -128,6 +147,20 @@
             <a class="btn" href="/?zone={{ zone|urlencode }}&shelf={{ shelf }}">Cancel</a>
           </div>
         </form>
+        <script>
+          (function(){
+            var zoneSel = document.getElementById('newItemZone');
+            var shelfSel = document.getElementById('newItemShelf');
+            function sync(){
+              var opt = zoneSel.options[zoneSel.selectedIndex];
+              var hasShelves = opt && opt.getAttribute('data-has-shelves') === '1';
+              shelfSel.style.display = hasShelves ? '' : 'none';
+              shelfSel.disabled = !hasShelves;
+            }
+            zoneSel.addEventListener('change', sync);
+            sync();
+          })();
+        </script>
 
         <hr>
         <div class="muted">If you create duplicates by accident, you can delete the duplicate item later and keep the linked one.</div>
