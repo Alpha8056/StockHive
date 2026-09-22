@@ -984,7 +984,7 @@ def inventory_page():
         <h2>Search</h2>
         <form method="get" action="/inventory">
           <div class="fieldRow">
-            <input type="text" name="q" placeholder="Search by name or barcode" value="{request.args.get('q','')}">
+            <input type="text" name="q" id="invSearch" placeholder="Search by name or barcode" value="{request.args.get('q','')}" autofocus>
             <select name="zone">{zone_options}</select>
             <button class="btn btn-wide" type="submit">Apply</button>
             <a class="btn" href="/inventory">Clear</a>
@@ -992,6 +992,12 @@ def inventory_page():
         </form>
         <div class="muted row">Showing {len(filtered)} of {len(items)} items</div>
       </div>
+      <script>
+        window.onload = function() {{
+          var el = document.getElementById('invSearch');
+          if (el) {{ el.focus(); el.select(); }}
+        }};
+      </script>
 
       <div class="card">
         <table>
