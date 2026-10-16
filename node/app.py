@@ -47,6 +47,7 @@ from inventory import (
     resolve_barcode,
     add_barcode_alias,
     get_aliases_for_barcode,
+    get_all_aliases_by_item,
     remove_barcode_alias,
 
     # Inventory / Grocery
@@ -892,11 +893,15 @@ def inventory_page():
     zone_filter = (request.args.get("zone", "All") or "All").strip()
 
     items = get_inventory()
+    aliases_by_item = get_all_aliases_by_item()
 
     def matches(row):
         barcode, name, location, qty, low, expiration_date = row
-        if q and (q not in name.lower()) and (q not in barcode.lower()):
-            return False
+        if q:
+            haystack = [name.lower(), barcode.lower()]
+            haystack += [a.lower() for a in aliases_by_item.get(barcode, [])]
+            if not any(q in h for h in haystack):
+                return False
         if zone_filter != "All":
             if not str(location).startswith(zone_filter):
                 return False
@@ -924,9 +929,16 @@ def inventory_page():
         low_cell = str(low) if low else "-"
         exp_cell = _expiration_badge_html(expiration_date) or (expiration_date or "-")
 
+        item_aliases = aliases_by_item.get(barcode, [])
+        barcode_cell = f"<span class='mono'>{barcode}</span>"
+        if item_aliases:
+            alias_text = ", ".join(item_aliases)
+            barcode_cell += f"<div class='muted' style='font-size:12px;margin-top:2px;'>{alias_text}</div>"
+
         rows += f"""
         <tr>
           <td>{name}</td>
+          <td>{barcode_cell}</td>
           <td>{location}</td>
           <td>{qty_cell}</td>
           <td>{low_cell}</td>
@@ -1001,8 +1013,8 @@ def inventory_page():
 
       <div class="card">
         <table>
-          <tr><th>Item</th><th>Location</th><th>Qty</th><th>Low</th><th>Expires</th><th>Actions</th></tr>
-          {rows if rows else "<tr><td colspan='6' class='muted'>No results.</td></tr>"}
+          <tr><th>Item</th><th>Barcodes</th><th>Location</th><th>Qty</th><th>Low</th><th>Expires</th><th>Actions</th></tr>
+          {rows if rows else "<tr><td colspan='7' class='muted'>No results.</td></tr>"}
         </table>
       </div>
 

@@ -254,6 +254,33 @@ def get_aliases_for_barcode(canonical_barcode: str):
         conn.close()
 
 
+def get_all_aliases_by_item():
+    """
+    Returns {canonical_barcode: [alias_barcode, ...]} for every item that
+    has at least one linked alias, in a single query — used by pages like
+    /inventory that list many items at once, so looking up aliases
+    doesn't cost one extra query per row.
+    """
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT i.barcode AS canonical, a.barcode AS alias
+            FROM barcode_aliases a
+            JOIN items i ON i.id = a.item_id
+            ORDER BY a.created_at DESC;
+            """
+        )
+        rows = cur.fetchall()
+        result = {}
+        for r in rows:
+            result.setdefault(r["canonical"], []).append(r["alias"])
+        return result
+    finally:
+        conn.close()
+
+
 def remove_barcode_alias(alias_barcode: str) -> None:
     """Un-links an alias barcode. The canonical item and its history are
     untouched; the alias barcode just goes back to being unrecognized."""
