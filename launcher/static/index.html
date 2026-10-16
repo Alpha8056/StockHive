@@ -41,9 +41,9 @@ body{
 .settingsBtn:hover{ background:var(--btnHover); }
 
 .clockBlock{ text-align:center; margin:0; }
-.clockBlock .time{ font-size:48px; font-weight:900; letter-spacing:.5px; line-height:1; }
-.clockBlock .date{ margin-top:6px; font-size:17px; font-weight:700; color:var(--muted); }
-@media (max-width:560px){ .clockBlock .time{ font-size:38px; } }
+.clockBlock .time{ font-size:76px; font-weight:900; letter-spacing:.5px; line-height:1; }
+.clockBlock .date{ margin-top:14px; font-size:24px; font-weight:700; color:var(--muted); }
+@media (max-width:560px){ .clockBlock .time{ font-size:52px; } .clockBlock .date{ font-size:19px; } }
 
 .carousel{
   position:relative; margin:10px 0 28px; border-radius:20px; overflow:hidden;
@@ -55,6 +55,7 @@ body{
 .carouselSlide{
   flex:0 0 100%; min-width:100%; box-sizing:border-box;
   padding:30px 20px 22px; cursor:pointer; user-select:none;
+  display:flex; flex-direction:column; justify-content:center;
 }
 .carouselDots{ display:flex; justify-content:center; gap:8px; padding:4px 0 16px; }
 .carouselDot{
@@ -78,10 +79,11 @@ body{
 .expLabel{ font-weight:800; font-size:13px; white-space:nowrap; }
 .expLabel.expired, .expLabel.today{ color:#f87171; }
 .expLabel.soon{ color:#f59e0b; }
-.glanceTemp{ font-size:40px; font-weight:900; line-height:1; text-align:center; }
-.glanceCond{ text-align:center; color:var(--muted); font-size:15px; font-weight:700; margin-top:6px; }
-.glanceSub{ text-align:center; color:var(--muted); font-size:13px; margin-top:10px; }
-.glanceHoliday{ text-align:center; margin-top:16px; font-size:14px; font-weight:800; color:#a78bfa; }
+.glanceTemp{ font-size:68px; font-weight:900; line-height:1; text-align:center; }
+.glanceCond{ text-align:center; color:var(--muted); font-size:20px; font-weight:700; margin-top:10px; }
+.glanceSub{ text-align:center; color:var(--muted); font-size:16px; margin-top:16px; }
+.glanceHoliday{ text-align:center; margin-top:20px; font-size:17px; font-weight:800; color:#a78bfa; }
+@media (max-width:560px){ .glanceTemp{ font-size:48px; } }
 
 .searchRow{ margin-bottom:20px; text-align:center; }
 #search{
