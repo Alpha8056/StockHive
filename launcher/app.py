@@ -292,6 +292,16 @@ def _get_git_build() -> str:
     return "unknown"
 
 
+# Set by _delayed_restart's background thread if `sudo systemctl restart`
+# itself fails (e.g. a stale/missing sudoers rule) — the request that
+# triggered it already got its optimistic "Restarting…" redirect by then,
+# so this is surfaced the next time /settings loads instead. A failure
+# here means the process never actually restarted: the build hash can
+# show a new commit while the running worker still has the old code
+# loaded, with no visible error otherwise.
+_last_restart_error = None
+
+
 def _delayed_restart(delay: float = 1.0) -> None:
     """Restarts the launcher's own systemd service from a background
     thread after a short delay, so the HTTP response announcing the
@@ -300,8 +310,17 @@ def _delayed_restart(delay: float = 1.0) -> None:
     process trying to run it. Relies on the passwordless sudoers entry
     setup.sh installs for exactly this command."""
     def _run():
+        global _last_restart_error
         time.sleep(delay)
-        subprocess.run([SUDO_BIN, SYSTEMCTL_BIN, "restart", SERVICE_NAME])
+        try:
+            result = subprocess.run(
+                [SUDO_BIN, SYSTEMCTL_BIN, "restart", SERVICE_NAME],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode != 0:
+                _last_restart_error = (result.stderr or result.stdout or f"exit code {result.returncode}").strip()
+        except Exception as e:
+            _last_restart_error = str(e)
     threading.Thread(target=_run, daemon=True).start()
 
 
@@ -390,6 +409,10 @@ SETTINGS_HTML = """
   <div class="banner {{ request.args.get('msgtype', 'ok') }}">{{ request.args.get('msg') }}</div>
   {% endif %}
 
+  {% if restart_error %}
+  <div class="banner danger">Restart/update did not take effect — the service is still running the old build. {{ restart_error }}</div>
+  {% endif %}
+
   <div class="card">
     <h2 style="margin-bottom:10px;">Weather Location</h2>
     <form method="post" action="/settings/weather">
@@ -452,11 +475,15 @@ SETTINGS_HTML = """
 
 @app.get("/settings")
 def settings_page():
+    global _last_restart_error
+    restart_error = _last_restart_error
+    _last_restart_error = None
     return render_template_string(
         SETTINGS_HTML,
         build=_get_git_build(),
         weather_zip=weather_client.get_weather_zip(),
         nodes=[_format_node(r) for r in nodes_db.list_nodes(include_deleted=False)],
+        restart_error=restart_error,
     )
 
 
