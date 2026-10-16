@@ -379,7 +379,8 @@ def _styles():
       tr:last-child td{ border-bottom:none; }
       .qty-zero{ color:var(--danger); font-weight:900; }
       .qty-low{ color:var(--warn); font-weight:900; }
-      .item-cell{ display:flex; align-items:center; gap:10px; }
+      .item-cell{ display:flex; align-items:center; gap:10px; min-width:0; }
+      .item-cell span{ min-width:0; overflow-wrap:break-word; word-break:break-word; }
       .item-thumb{ width:36px; height:36px; border-radius:8px; object-fit:cover; flex-shrink:0; }
       .item-thumb-placeholder{ display:flex; align-items:center; justify-content:center;
               background:rgba(255,255,255,0.05); border:1px solid var(--border); color:var(--muted); }
@@ -395,9 +396,16 @@ def _styles():
 
       /* Inventory list: a grid that behaves like a table on wide screens
          and collapses each row into its own touch-friendly card below
-         the breakpoint — same markup both ways, via display:contents on
-         .invMeta to let its children join the wide grid directly, or
-         flow together as one compact line in the card. */
+         the breakpoint. .invBody/.invLeft/.invMeta/.invQtyBlock are all
+         display:contents by default, which flattens every leaf cell
+         (item/location/qty/low/expires/actions) up to be a direct grid
+         item of .invRow regardless of how they're nested in the HTML —
+         each then claims its column explicitly via grid-column, since
+         the nesting needed for the narrow card layout (Qty/Low grouped
+         together, separately from Location/Expires) doesn't match the
+         wide table's left-to-right column order. Below the breakpoint,
+         those same wrappers switch to real flex containers instead,
+         producing the card grouping directly. */
       .invList{ border:1px solid var(--border); border-radius:14px; overflow:hidden; background:rgba(255,255,255,0.02); }
       .invHead, .invRow{
         display:grid; grid-template-columns: minmax(140px,2fr) minmax(90px,1fr) 56px 56px 110px 150px;
@@ -405,23 +413,41 @@ def _styles():
       }
       .invRow:last-child{ border-bottom:none; }
       .invHead{ color:var(--muted); font-weight:900; background:rgba(255,255,255,0.03); }
-      .invMeta{ display:contents; }
-      .invCell-actions{ display:flex; gap:8px; flex-wrap:wrap; }
+
+      .invBody, .invLeft, .invMeta, .invQtyBlock{ display:contents; }
+      .invCell-item{ grid-column:1; min-width:0; }
+      .invCell-location{ grid-column:2; }
+      .invCell-qty{ grid-column:3; }
+      .invCell-low{ grid-column:4; }
+      .invCell-expires{ grid-column:5; }
+      .invCell-actions{ grid-column:6; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+
       .invLabel{ display:none; }
+      .invQtyLabel{ display:none; }
       .invEmpty{ padding:16px; color:var(--muted); }
 
       @media (max-width:760px){
         .invHead{ display:none; }
         .invList{ background:none; border:none; }
         .invRow{
-          display:flex; flex-direction:column; align-items:stretch; gap:10px;
-          grid-template-columns:none; padding:14px; border:1px solid var(--border); border-radius:16px;
+          display:block; grid-template-columns:none;
+          padding:14px; border:1px solid var(--border); border-radius:16px;
           background:linear-gradient(180deg,var(--panel) 0%,var(--panel2) 100%);
           box-shadow:0 10px 30px var(--shadow); margin-bottom:12px;
         }
         .invRow:last-child{ margin-bottom:0; border-bottom:1px solid var(--border); }
-        .invMeta{ display:flex; flex-wrap:wrap; gap:6px 16px; color:var(--muted); font-size:14px; }
+        .invCell-item{ margin-bottom:10px; }
+
+        .invBody{ display:flex; flex-direction:row; align-items:stretch; gap:14px; }
+        .invLeft{ display:flex; flex-direction:column; flex:1; min-width:0; gap:10px; }
+        .invMeta{ display:flex; flex-wrap:wrap; gap:6px 14px; color:var(--muted); font-size:14px; }
         .invCell-actions{ border-top:1px solid var(--border); padding-top:10px; }
+
+        .invQtyBlock{ display:flex; flex-direction:column; justify-content:center; align-items:flex-end; gap:10px; flex-shrink:0; }
+        .invQtyItem{ text-align:right; }
+        .invQtyLabel{ display:block; color:var(--muted); font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
+        .invQtyNum{ display:block; font-size:30px; font-weight:900; line-height:1.15; }
+
         .invLabel{ display:inline; }
       }
       .exp-badge{ text-decoration:none; }
@@ -995,13 +1021,13 @@ def inventory_page():
         low = int(low) if low is not None else 0
 
         if qty == 0:
-            qty_cell = f"<span class='qty-zero'>{qty}</span>"
+            qty_cls = "qty-zero"
         elif low > 0 and qty <= low:
-            qty_cell = f"<span class='qty-low'>{qty}</span>"
+            qty_cls = "qty-low"
         else:
-            qty_cell = str(qty)
+            qty_cls = ""
 
-        low_cell = str(low) if low else "-"
+        low_display = str(low) if low else "-"
         # The badge text ("Expires in 3d", "Expired 8d ago") already
         # reads fine on its own in the card view; only the bare
         # date/dash fallback needs a label to make sense out of context
@@ -1017,19 +1043,31 @@ def inventory_page():
 
         rows += f"""
         <div class="invRow">
-          <div><div class="item-cell">{thumb_html}<span>{name}</span></div></div>
-          <div class="invMeta">
-            <div>{location}</div>
-            <div><span class="invLabel">Qty </span>{qty_cell}</div>
-            <div><span class="invLabel">Low </span>{low_cell}</div>
-            <div>{exp_cell}</div>
-          </div>
-          <div class="invCell-actions">
-            <form class="inline" method="post" action="/inventory-remove">
-              <input type="hidden" name="barcode" value="{barcode}">
-              <button class="btn btn-danger">-1</button>
-            </form>
-            <a class="btn" href="/edit?barcode={barcode}">Edit</a>
+          <div class="invCell-item"><div class="item-cell">{thumb_html}<span>{name}</span></div></div>
+          <div class="invBody">
+            <div class="invLeft">
+              <div class="invMeta">
+                <div class="invCell-location">{location}</div>
+                <div class="invCell-expires">{exp_cell}</div>
+              </div>
+              <div class="invCell-actions">
+                <form class="inline" method="post" action="/inventory-remove">
+                  <input type="hidden" name="barcode" value="{barcode}">
+                  <button class="btn btn-danger">-1</button>
+                </form>
+                <a class="btn" href="/edit?barcode={barcode}">Edit</a>
+              </div>
+            </div>
+            <div class="invQtyBlock">
+              <div class="invQtyItem invCell-qty">
+                <span class="invQtyLabel">Qty</span>
+                <span class="invQtyNum {qty_cls}">{qty}</span>
+              </div>
+              <div class="invQtyItem invCell-low">
+                <span class="invQtyLabel">Low</span>
+                <span class="invQtyNum">{low_display}</span>
+              </div>
+            </div>
           </div>
         </div>
         """
