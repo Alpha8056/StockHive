@@ -382,14 +382,48 @@ def _styles():
       .item-cell{ display:flex; align-items:center; gap:10px; }
       .item-thumb{ width:36px; height:36px; border-radius:8px; object-fit:cover; flex-shrink:0; }
       .item-thumb-placeholder{ display:flex; align-items:center; justify-content:center;
-              background:rgba(255,255,255,0.05); border:1px solid var(--border); font-size:16px; }
+              background:rgba(255,255,255,0.05); border:1px solid var(--border); color:var(--muted); }
+      .item-thumb-placeholder svg{ width:50%; height:50%; }
       .item-photo-box{ width:160px; height:160px; border-radius:16px; overflow:hidden; flex-shrink:0;
-              display:flex; align-items:center; justify-content:center; font-size:48px;
+              display:flex; align-items:center; justify-content:center; color:var(--muted);
               border:1px solid var(--border); background:rgba(255,255,255,0.03); }
+      .item-photo-box svg{ width:40%; height:40%; }
       .item-photo-box img{ width:100%; height:100%; object-fit:cover; display:block; }
       .navRow{ display:flex; gap:10px; flex-wrap:wrap; margin-top:10px; }
       .twoCol{ display:grid; grid-template-columns: 1fr; gap:12px; }
       @media (min-width: 860px){ .twoCol{ grid-template-columns: 1fr 1fr; } }
+
+      /* Inventory list: a grid that behaves like a table on wide screens
+         and collapses each row into its own touch-friendly card below
+         the breakpoint — same markup both ways, via display:contents on
+         .invMeta to let its children join the wide grid directly, or
+         flow together as one compact line in the card. */
+      .invList{ border:1px solid var(--border); border-radius:14px; overflow:hidden; background:rgba(255,255,255,0.02); }
+      .invHead, .invRow{
+        display:grid; grid-template-columns: minmax(140px,2fr) minmax(90px,1fr) 56px 56px 110px 150px;
+        gap:10px; align-items:center; padding:12px 14px; border-bottom:1px solid var(--border);
+      }
+      .invRow:last-child{ border-bottom:none; }
+      .invHead{ color:var(--muted); font-weight:900; background:rgba(255,255,255,0.03); }
+      .invMeta{ display:contents; }
+      .invCell-actions{ display:flex; gap:8px; flex-wrap:wrap; }
+      .invLabel{ display:none; }
+      .invEmpty{ padding:16px; color:var(--muted); }
+
+      @media (max-width:760px){
+        .invHead{ display:none; }
+        .invList{ background:none; border:none; }
+        .invRow{
+          display:flex; flex-direction:column; align-items:stretch; gap:10px;
+          grid-template-columns:none; padding:14px; border:1px solid var(--border); border-radius:16px;
+          background:linear-gradient(180deg,var(--panel) 0%,var(--panel2) 100%);
+          box-shadow:0 10px 30px var(--shadow); margin-bottom:12px;
+        }
+        .invRow:last-child{ margin-bottom:0; border-bottom:1px solid var(--border); }
+        .invMeta{ display:flex; flex-wrap:wrap; gap:6px 16px; color:var(--muted); font-size:14px; }
+        .invCell-actions{ border-top:1px solid var(--border); padding-top:10px; }
+        .invLabel{ display:inline; }
+      }
       .exp-badge{ text-decoration:none; }
       form.inline{ display:inline; }
       .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
@@ -502,9 +536,12 @@ def _expiration_badge_html(expiration_date):
     status = _expiration_status(expiration_date)
     if not status:
         return ""
+    # Color alone (set via cls) already carries the urgency — red for
+    # expired/today, yellow for upcoming — so no icon is needed here;
+    # the emoji this used to show rendered as a blank "tofu" box on the
+    # kiosk Pi's Chromium, which has no emoji font installed.
     cls = "qty-zero" if status["level"] in ("expired", "today") else "qty-low"
-    icon = "⚠️" if status["level"] in ("expired", "today") else "⏰"
-    return f"<span class='{cls}' title='{status['label']}'>{icon} {status['label']}</span>"
+    return f"<span class='{cls}' title='{status['label']}'>{status['label']}</span>"
 
 
 def _expiring_summary():
@@ -524,9 +561,8 @@ def _expiring_nav_html():
     items, urgent = _expiring_summary()
     if not items:
         return ""
-    icon = "⚠️" if urgent else "⏰"
     btn_cls = "btn-danger" if urgent else "btn-warn"
-    return f'<div class="row"><a class="btn exp-badge {btn_cls}" href="/expiring">{icon} {len(items)} Expiring</a></div>'
+    return f'<div class="row"><a class="btn exp-badge {btn_cls}" href="/expiring">{len(items)} Expiring</a></div>'
 
 
 # ============================================================
@@ -908,6 +944,20 @@ def move_save():
 # SECTION: Routes — Inventory (search/filter/thresholds/stats)
 # ============================================================
 
+# Inline SVG, not an emoji — the kiosk Chromium on the Pi has no emoji
+# font installed, so a glyph like \U0001F4F7 renders as a blank "tofu"
+# box (visible in bug reports from the device) instead of a camera.
+# currentColor lets it pick up whichever muted/text color its container
+# sets, same as the themed CSS everywhere else.
+_PHOTO_PLACEHOLDER_SVG = (
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+    'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'
+    '<path d="M4 7h3l1.5-2h7L17 7h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1z"/>'
+    '<circle cx="12" cy="13" r="3.5"/>'
+    '</svg>'
+)
+
+
 @app.route("/inventory")
 def inventory_page():
     status_html = _page_status_html()
@@ -952,53 +1002,36 @@ def inventory_page():
             qty_cell = str(qty)
 
         low_cell = str(low) if low else "-"
-        exp_cell = _expiration_badge_html(expiration_date) or (expiration_date or "-")
-
-        item_aliases = aliases_by_item.get(barcode, [])
-        barcode_cell = f"<span class='mono'>{barcode}</span>"
-        if item_aliases:
-            alias_text = ", ".join(item_aliases)
-            barcode_cell += f"<div class='muted' style='font-size:12px;margin-top:2px;'>{alias_text}</div>"
+        # The badge text ("Expires in 3d", "Expired 8d ago") already
+        # reads fine on its own in the card view; only the bare
+        # date/dash fallback needs a label to make sense out of context
+        # once the Expires column header is gone on narrow screens.
+        exp_badge = _expiration_badge_html(expiration_date)
+        exp_cell = exp_badge if exp_badge else f'<span class="invLabel">Expires </span>{expiration_date or "-"}'
 
         photo = photos_map.get(barcode)
         if photo:
             thumb_html = f'<img class="item-thumb" src="/static/photos/thumbs/{photo}" alt="">'
         else:
-            thumb_html = '<span class="item-thumb item-thumb-placeholder">\U0001F4F7</span>'
+            thumb_html = f'<span class="item-thumb item-thumb-placeholder">{_PHOTO_PLACEHOLDER_SVG}</span>'
 
         rows += f"""
-        <tr>
-          <td><div class="item-cell">{thumb_html}<span>{name}</span></div></td>
-          <td>{barcode_cell}</td>
-          <td>{location}</td>
-          <td>{qty_cell}</td>
-          <td>{low_cell}</td>
-          <td>{exp_cell}</td>
-          <td>
+        <div class="invRow">
+          <div><div class="item-cell">{thumb_html}<span>{name}</span></div></div>
+          <div class="invMeta">
+            <div>{location}</div>
+            <div><span class="invLabel">Qty </span>{qty_cell}</div>
+            <div><span class="invLabel">Low </span>{low_cell}</div>
+            <div>{exp_cell}</div>
+          </div>
+          <div class="invCell-actions">
             <form class="inline" method="post" action="/inventory-remove">
               <input type="hidden" name="barcode" value="{barcode}">
               <button class="btn btn-danger">-1</button>
             </form>
-
-            <form class="inline" method="get" action="/stats">
-              <input type="hidden" name="barcode" value="{barcode}">
-              <button class="btn btn-warn">Stats</button>
-            </form>
-
-            <form class="inline" method="post" action="/threshold-set">
-              <input type="hidden" name="barcode" value="{barcode}">
-              <input class="mono" style="width:86px;" type="number" min="0" name="threshold" value="{low}" title="Low threshold">
-              <button class="btn">Set</button>
-            </form>
-
             <a class="btn" href="/edit?barcode={barcode}">Edit</a>
-
-            <form class="inline" method="post" action="/inventory-delete">
-              <input type="hidden" name="barcode" value="{barcode}">
-              <button class="btn btn-danger">Delete</button>
-            </form>
-          </td>
-        </tr>
+          </div>
+        </div>
         """
 
     export_txt = "/export/inventory.txt"
@@ -1042,11 +1075,9 @@ def inventory_page():
         }};
       </script>
 
-      <div class="card">
-        <table>
-          <tr><th>Item</th><th>Barcodes</th><th>Location</th><th>Qty</th><th>Low</th><th>Expires</th><th>Actions</th></tr>
-          {rows if rows else "<tr><td colspan='7' class='muted'>No results.</td></tr>"}
-        </table>
+      <div class="invList">
+        <div class="invHead"><div>Item</div><div>Location</div><div>Qty</div><div>Low</div><div>Expires</div><div>Actions</div></div>
+        {rows if rows else "<div class='invEmpty'>No results.</div>"}
       </div>
 
     </div></div>
@@ -1070,7 +1101,7 @@ def threshold_set():
     set_low_threshold(barcode, thr_i)
     item = get_item_by_barcode(barcode)
     name = item[1] if item else "item"
-    return redirect(f"/inventory?msgtype=ok&msg=Set%20low%20threshold%20for%20{name.replace(' ', '%20')}")
+    return redirect(f"/edit?barcode={barcode}&msgtype=ok&msg=Set%20low%20threshold%20for%20{name.replace(' ', '%20')}")
 
 
 @app.route("/inventory-remove", methods=["POST"])
@@ -1126,7 +1157,7 @@ def edit_item_page():
           </label>
         """
     else:
-        photo_box_html = "\U0001F4F7"
+        photo_box_html = _PHOTO_PLACEHOLDER_SVG
         remove_photo_html = ""
 
     aliases = get_aliases_for_barcode(barcode)
@@ -1201,6 +1232,29 @@ def edit_item_page():
             <button class="btn btn-warn" type="submit">Link Barcode</button>
           </div>
         </form>
+      </div>
+
+      <div class="card">
+        <h2>Low Stock Threshold</h2>
+        <div class="muted">Flags this item as low stock on the Grocery &amp; Low Stock page once quantity drops to or below this number.</div>
+        <form method="post" action="/threshold-set" style="margin-top:10px;">
+          <input type="hidden" name="barcode" value="{barcode}">
+          <div class="fieldRow">
+            <input class="mono" style="width:100px;" type="number" min="0" name="threshold" value="{low}" title="Low threshold">
+            <button class="btn btn-wide" type="submit">Set</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>More</h2>
+        <div class="fieldRow">
+          <a class="btn btn-wide btn-warn" href="/stats?barcode={barcode}">View Stats</a>
+          <form class="inline" method="post" action="/inventory-delete">
+            <input type="hidden" name="barcode" value="{barcode}">
+            <button class="btn btn-wide btn-danger" type="submit">Delete Item</button>
+          </form>
+        </div>
       </div>
     </div></div>
     """

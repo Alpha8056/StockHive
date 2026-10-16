@@ -161,7 +161,7 @@ body{
 
   <div class="topbar">
     <div class="brand">StockHive<small>launcher</small></div>
-    <a class="settingsBtn" href="/settings">⚙ Settings</a>
+    <a class="settingsBtn" href="/settings">Settings</a>
   </div>
 
   <div class="carousel" id="carousel">
@@ -356,9 +356,9 @@ function getHolidayLine(){
     check.setDate(check.getDate() + offset);
     const hit = all.find(([d]) => sameDay(d, check));
     if(hit){
-      if(offset === 0) return `🎉 Today is ${hit[1]}`;
-      if(offset === 1) return `🎉 Tomorrow is ${hit[1]}`;
-      return `🎉 ${hit[1]} is in ${offset} days`;
+      if(offset === 0) return `Today is ${hit[1]}`;
+      if(offset === 1) return `Tomorrow is ${hit[1]}`;
+      return `${hit[1]} is in ${offset} days`;
     }
   }
   return null;
