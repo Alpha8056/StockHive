@@ -230,6 +230,11 @@ def _migrate(conn):
     # Ensure dismissed-expiration-alert flag exists
     _ensure_column(conn, "items", "dismissed_expiration", "dismissed_expiration INTEGER NOT NULL DEFAULT 0")
 
+    # Ensure optional photo column exists — stores just a filename
+    # (resolved under static/photos/ / static/photos/thumbs/), never the
+    # image bytes themselves.
+    _ensure_column(conn, "items", "photo", "photo TEXT")
+
     # Ensure events table exists
     _ensure_events_table(conn)
 

@@ -13,6 +13,10 @@ venv/
 *.sqlite
 *.sqlite3
 
+# Item photos (generated on disk, not tracked — Settings > Update's
+# `git pull --ff-only` must never see these as local changes)
+static/photos/
+
 # Backups / editor saves
 *.bak
 *.save

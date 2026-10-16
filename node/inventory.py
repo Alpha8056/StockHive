@@ -378,6 +378,65 @@ def get_item_by_barcode(barcode: str):
         conn.close()
 
 
+def get_item_photo(barcode: str):
+    """Returns an item's stored photo filename, or None. Kept separate
+    from get_item_by_barcode()'s tuple — that tuple is unpacked
+    positionally at many call sites in app.py, so adding a field there
+    would break all of them."""
+    barcode = (barcode or "").strip()
+    if not barcode:
+        return None
+
+    canonical = resolve_barcode(barcode)
+    if canonical:
+        barcode = canonical
+
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT photo FROM items WHERE barcode = ?;", (barcode,))
+        row = cur.fetchone()
+        return row["photo"] if row else None
+    finally:
+        conn.close()
+
+
+def set_item_photo(barcode: str, filename) -> None:
+    """Sets (or clears, if filename is None) the stored photo filename
+    for an item. Doesn't touch the files themselves — callers delete the
+    old file via photos.delete_photo() after this succeeds."""
+    barcode = (barcode or "").strip()
+    if not barcode:
+        raise ValueError("Barcode required")
+
+    canonical = resolve_barcode(barcode)
+    if canonical:
+        barcode = canonical
+
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE items SET photo = ? WHERE barcode = ?;", (filename, barcode))
+        if cur.rowcount == 0:
+            raise ValueError("Item not found")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_photos_map() -> dict:
+    """barcode -> photo filename, for every item that has one. One bulk
+    query for the Inventory list's thumbnails instead of a lookup per
+    row, and instead of adding photo to get_inventory()'s tuple shape."""
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT barcode, photo FROM items WHERE photo IS NOT NULL AND photo != '';")
+        return {r["barcode"]: r["photo"] for r in cur.fetchall()}
+    finally:
+        conn.close()
+
+
 def get_inventory():
     """
     Returns list of tuples:

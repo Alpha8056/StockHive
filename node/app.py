@@ -11,16 +11,19 @@ import time
 import shutil
 import io
 import socket
+import zipfile
 from datetime import date, datetime
 from urllib.parse import quote
 
 from flask import Flask, request, redirect, send_file, Response, url_for, render_template, jsonify
 
 from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.exceptions import RequestEntityTooLarge
 
 import labels
 import mdns_advertise
 import identity
+import photos
 
 class PrefixMiddleware:
     def __init__(self, app):
@@ -53,6 +56,9 @@ from inventory import (
 
     # Inventory / Grocery
     get_item_by_barcode,
+    get_item_photo,
+    set_item_photo,
+    get_photos_map,
     add_item,
     increment_existing,
     remove_one,
@@ -370,6 +376,14 @@ def _styles():
       tr:last-child td{ border-bottom:none; }
       .qty-zero{ color:var(--danger); font-weight:900; }
       .qty-low{ color:var(--warn); font-weight:900; }
+      .item-cell{ display:flex; align-items:center; gap:10px; }
+      .item-thumb{ width:36px; height:36px; border-radius:8px; object-fit:cover; flex-shrink:0; }
+      .item-thumb-placeholder{ display:flex; align-items:center; justify-content:center;
+              background:rgba(255,255,255,0.05); border:1px solid var(--border); font-size:16px; }
+      .item-photo-box{ width:160px; height:160px; border-radius:16px; overflow:hidden; flex-shrink:0;
+              display:flex; align-items:center; justify-content:center; font-size:48px;
+              border:1px solid var(--border); background:rgba(255,255,255,0.03); }
+      .item-photo-box img{ width:100%; height:100%; object-fit:cover; display:block; }
       .navRow{ display:flex; gap:10px; flex-wrap:wrap; margin-top:10px; }
       .twoCol{ display:grid; grid-template-columns: 1fr; gap:12px; }
       @media (min-width: 860px){ .twoCol{ grid-template-columns: 1fr 1fr; } }
@@ -901,6 +915,7 @@ def inventory_page():
 
     items = get_inventory()
     aliases_by_item = get_all_aliases_by_item()
+    photos_map = get_photos_map()
 
     def matches(row):
         barcode, name, location, qty, low, expiration_date = row
@@ -942,9 +957,15 @@ def inventory_page():
             alias_text = ", ".join(item_aliases)
             barcode_cell += f"<div class='muted' style='font-size:12px;margin-top:2px;'>{alias_text}</div>"
 
+        photo = photos_map.get(barcode)
+        if photo:
+            thumb_html = f'<img class="item-thumb" src="/static/photos/thumbs/{photo}" alt="">'
+        else:
+            thumb_html = '<span class="item-thumb item-thumb-placeholder">\U0001F4F7</span>'
+
         rows += f"""
         <tr>
-          <td>{name}</td>
+          <td><div class="item-cell">{thumb_html}<span>{name}</span></div></td>
           <td>{barcode_cell}</td>
           <td>{location}</td>
           <td>{qty_cell}</td>
@@ -1074,7 +1095,10 @@ def inventory_delete():
     if not item:
         return redirect("/inventory?msgtype=danger&msg=Item%20not%20found")
 
+    photo = get_item_photo(barcode)
     delete_item(barcode)
+    if photo:
+        photos.delete_photo(photo)
     return redirect(f"/inventory?msgtype=danger&msg=Deleted%20{item[1].replace(' ', '%20')}")
 
 
@@ -1087,7 +1111,19 @@ def edit_item_page():
     if not item:
         return redirect("/inventory?msgtype=danger&msg=Item%20not%20found")
     _, name, location, qty, low, expiration_date = item
+    photo = get_item_photo(barcode)
     status_html = _page_status_html()
+
+    if photo:
+        photo_box_html = f'<img src="/static/photos/{photo}" alt="">'
+        remove_photo_html = """
+          <label class="fieldRow" style="margin-top:10px;gap:8px;">
+            <input type="checkbox" name="remove_photo" value="1"> Remove current photo
+          </label>
+        """
+    else:
+        photo_box_html = "\U0001F4F7"
+        remove_photo_html = ""
 
     aliases = get_aliases_for_barcode(barcode)
     alias_rows = "".join(
@@ -1113,7 +1149,7 @@ def edit_item_page():
       </header>
       {status_html}
       <div class="card">
-        <form method="post" action="/edit-save">
+        <form method="post" action="/edit-save" enctype="multipart/form-data">
           <input type="hidden" name="barcode" value="{barcode}">
           <div class="fieldRow" style="margin-bottom:14px;">
             <label style="color:var(--muted);font-size:14px;">Item Name</label>
@@ -1126,6 +1162,16 @@ def edit_item_page():
           </div>
           <div class="fieldRow">
             <input type="date" name="expiration_date" value="{expiration_date or ''}">
+          </div>
+          <div class="fieldRow" style="margin-top:14px;margin-bottom:14px;">
+            <label style="color:var(--muted);font-size:14px;">Photo (optional)</label>
+          </div>
+          <div class="fieldRow" style="align-items:flex-start;">
+            <div class="item-photo-box">{photo_box_html}</div>
+            <div>
+              <input type="file" name="photo" accept="image/*">
+              {remove_photo_html}
+            </div>
           </div>
           <div class="fieldRow" style="margin-top:16px;">
             <button class="btn btn-wide" type="submit">Save</button>
@@ -1174,13 +1220,43 @@ def edit_alias_remove():
         return redirect(f"/edit?barcode={barcode}&msgtype=danger&msg={quote(str(e))}")
 
 
+PHOTO_UPLOAD_MAX_BYTES = 8 * 1024 * 1024  # 8MB — generous for a phone camera JPEG
+
+
 @app.route("/edit-save", methods=["POST"])
 def edit_item_save():
-    barcode = (request.form.get("barcode", "") or "").strip()
-    new_name = (request.form.get("name", "") or "").strip()
-    expiration_date = (request.form.get("expiration_date", "") or "").strip()
+    # Scoped to just this route (Flask's per-request override) rather
+    # than a global app.config limit — the unrelated /restore upload can
+    # legitimately be a much larger inventory.db, and shouldn't be capped
+    # by a size meant for one photo.
+    request.max_content_length = PHOTO_UPLOAD_MAX_BYTES
+    try:
+        barcode = (request.form.get("barcode", "") or "").strip()
+        new_name = (request.form.get("name", "") or "").strip()
+        expiration_date = (request.form.get("expiration_date", "") or "").strip()
+        remove_photo = request.form.get("remove_photo") == "1"
+        photo_file = request.files.get("photo")
+    except RequestEntityTooLarge:
+        return redirect("/inventory?msgtype=danger&msg=Photo%20too%20large%20(8MB%20max)")
+
     if not barcode or not new_name:
         return redirect("/inventory?msgtype=danger&msg=Name%20required")
+
+    if photo_file and photo_file.filename:
+        try:
+            new_filename = photos.save_photo(photo_file)
+        except ValueError as e:
+            return redirect(f"/edit?barcode={barcode}&msgtype=danger&msg={quote(str(e))}")
+        old_photo = get_item_photo(barcode)
+        set_item_photo(barcode, new_filename)
+        if old_photo:
+            photos.delete_photo(old_photo)
+    elif remove_photo:
+        old_photo = get_item_photo(barcode)
+        if old_photo:
+            set_item_photo(barcode, None)
+            photos.delete_photo(old_photo)
+
     try:
         update_item_name(barcode, new_name)
         update_item_expiration(barcode, expiration_date)
@@ -1546,16 +1622,16 @@ def tools_page():
 
       <div class="card">
         <h2>Backup</h2>
-        <div class="muted">Downloads your current inventory database.</div>
+        <div class="muted">Downloads your inventory database and item photos as one .zip file.</div>
         <div class="row"><a class="btn btn-wide" href="/backup">Download Backup</a></div>
       </div>
 
       <div class="card">
         <h2>Restore</h2>
-        <div class="muted">Upload an inventory.db backup file. After restore, restart the app/service.</div>
+        <div class="muted">Upload a backup .zip (includes photos) or an older plain inventory.db file (no photos). After restore, restart the app/service.</div>
         <form method="post" action="/restore" enctype="multipart/form-data">
           <div class="fieldRow">
-            <input type="file" name="dbfile" accept=".db">
+            <input type="file" name="dbfile" accept=".zip,.db">
             <button class="btn btn-wide btn-danger" type="submit">Restore</button>
           </div>
         </form>
@@ -1835,7 +1911,100 @@ def locations_delete():
 def backup_db():
     if not os.path.exists(DB_PATH):
         return redirect("/tools?msgtype=danger&msg=Database%20not%20found")
-    return send_file(DB_PATH, as_attachment=True, download_name="inventory.db")
+
+    # Bundled as a zip (db + photos) rather than the raw .db file alone —
+    # item photos live on disk under static/photos/, not in the database,
+    # so a db-only backup would silently lose them.
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.write(DB_PATH, "inventory.db")
+        if os.path.isdir(photos.PHOTOS_DIR):
+            for root, _dirs, files in os.walk(photos.PHOTOS_DIR):
+                for fname in files:
+                    full_path = os.path.join(root, fname)
+                    arcname = "photos/" + os.path.relpath(full_path, photos.PHOTOS_DIR).replace(os.sep, "/")
+                    zf.write(full_path, arcname)
+    buf.seek(0)
+    return send_file(buf, as_attachment=True, download_name="stockhive_backup.zip", mimetype="application/zip")
+
+
+# Total bytes a restore will ever write, across inventory.db + all
+# photos combined — generous for a real backup (a sqlite db plus a few
+# hundred resized photos at tens of KB each is nowhere close to this),
+# but bounds a crafted/zip-bomb archive instead of filling the disk.
+RESTORE_MAX_TOTAL_BYTES = 200 * 1024 * 1024
+_RESTORE_COPY_CHUNK = 1024 * 1024
+
+
+def _safe_member_path(base_dir: str, rel: str) -> str:
+    """Resolves `rel` under `base_dir` and confirms the result actually
+    stays inside it — the standard zip-slip defense. Catches absolute
+    paths, "..", and any combination that would otherwise escape, by
+    checking the final resolved path rather than pattern-matching the
+    raw string."""
+    if not rel or os.path.isabs(rel) or rel.startswith(("/", "\\")):
+        raise ValueError("Unsafe path in backup")
+    base = os.path.realpath(base_dir)
+    dest = os.path.realpath(os.path.join(base, rel))
+    if dest != base and not dest.startswith(base + os.sep):
+        raise ValueError("Unsafe path in backup")
+    return dest
+
+
+def _copy_capped(src, dst, budget: list) -> None:
+    """Copies src->dst in chunks, decrementing the shared one-item
+    `budget` counter (shared across every file in one restore, not reset
+    per-file) and aborting if it runs out. Enforced against bytes
+    actually read, not a zip entry's declared (and possibly dishonest)
+    size."""
+    while True:
+        chunk = src.read(_RESTORE_COPY_CHUNK)
+        if not chunk:
+            return
+        budget[0] -= len(chunk)
+        if budget[0] < 0:
+            raise ValueError("Backup is too large to restore")
+        dst.write(chunk)
+
+
+def _restore_from_zip(zip_path: str) -> None:
+    """
+    Extracts inventory.db and photos/ from a bundled backup made by
+    backup_db(). Only those two things are ever extracted — every other
+    entry in the zip is ignored outright — each resolved destination is
+    confirmed to stay inside its target directory (zip-slip defense),
+    and the total bytes written is capped so a crafted archive can't
+    fill the disk.
+    """
+    with zipfile.ZipFile(zip_path) as zf:
+        infos = zf.infolist()
+        names = [i.filename for i in infos]
+        if "inventory.db" not in names:
+            raise ValueError("Backup zip is missing inventory.db")
+
+        wanted = [
+            info for info in infos
+            if info.filename == "inventory.db"
+            or (info.filename.startswith("photos/") and not info.filename.endswith("/"))
+        ]
+
+        # Upfront check against the zip's own declared sizes, so an
+        # obviously-oversized backup is rejected before writing anything.
+        if sum(info.file_size for info in wanted) > RESTORE_MAX_TOTAL_BYTES:
+            raise ValueError("Backup is too large to restore")
+
+        budget = [RESTORE_MAX_TOTAL_BYTES]
+
+        for info in wanted:
+            if info.filename == "inventory.db":
+                dest_path = DB_PATH
+            else:
+                rel = info.filename[len("photos/"):]
+                dest_path = _safe_member_path(photos.PHOTOS_DIR, rel)
+                os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+
+            with zf.open(info) as src, open(dest_path, "wb") as dst:
+                _copy_capped(src, dst, budget)
 
 
 @app.route("/restore", methods=["POST"])
@@ -1850,25 +2019,46 @@ def restore_db():
         return redirect("/tools?msgtype=danger&msg=Upload%20failed")
 
     try:
-        if os.path.getsize(UPLOAD_TMP) < 1000:
+        if os.path.getsize(UPLOAD_TMP) < 4:
             os.remove(UPLOAD_TMP)
             return redirect("/tools?msgtype=danger&msg=Uploaded%20file%20looks%20invalid")
     except Exception:
         pass
 
+    # A bundled backup from this version's /backup is a zip; a backup
+    # from before photos existed is the raw inventory.db file. Sniffed by
+    # magic bytes, not the uploaded filename/extension, since browsers
+    # don't reliably preserve either.
+    is_zip = False
     try:
-        shutil.copy2(UPLOAD_TMP, DB_PATH)
+        with open(UPLOAD_TMP, "rb") as fh:
+            is_zip = fh.read(2) == b"PK"
+    except Exception:
+        pass
+
+    try:
+        if is_zip:
+            _restore_from_zip(UPLOAD_TMP)
+        else:
+            if os.path.getsize(UPLOAD_TMP) < 1000:
+                os.remove(UPLOAD_TMP)
+                return redirect("/tools?msgtype=danger&msg=Uploaded%20file%20looks%20invalid")
+            shutil.copy2(UPLOAD_TMP, DB_PATH)
         os.remove(UPLOAD_TMP)
         # A backup from an older install can be missing tables/columns
-        # this version added (e.g. node_settings) — every page reads from
-        # those on every request, so re-running the migration immediately
-        # (instead of only at next process start) keeps the app from
-        # 500ing on the very next page load after a restore.
+        # this version added (e.g. node_settings, items.photo) — every
+        # page reads from those on every request, so re-running the
+        # migration immediately (instead of only at next process start)
+        # keeps the app from 500ing on the very next page load after a
+        # restore.
         _db.init_db()
     except Exception:
+        if os.path.exists(UPLOAD_TMP):
+            os.remove(UPLOAD_TMP)
         return redirect("/tools?msgtype=danger&msg=Restore%20failed")
 
-    return redirect("/tools?msgtype=ok&msg=Restore%20complete")
+    msg = "Restore complete" if is_zip else "Restore complete (older backup format has no photos to restore)"
+    return redirect(f"/tools?msgtype=ok&msg={quote(msg)}")
 
 
 # ============================================================
