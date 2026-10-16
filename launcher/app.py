@@ -9,6 +9,7 @@ VERSION = "2.0.0"
 
 import os
 import subprocess
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -33,6 +34,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_DIR = os.path.dirname(BASE_DIR)
 VENV_PIP = os.path.join(BASE_DIR, "venv", "bin", "pip")
 SERVICE_NAME = "stockpi-launcher.service"
+NODE_SERVICE_NAME = "stockpi-node.service"
 
 # Absolute paths, not bare command names — the systemd unit sets PATH to
 # just this app's venv (so gunicorn resolves the right python/pip), which
@@ -40,6 +42,13 @@ SERVICE_NAME = "stockpi-launcher.service"
 GIT_BIN = "/usr/bin/git"
 SUDO_BIN = "/usr/bin/sudo"
 SYSTEMCTL_BIN = "/bin/systemctl"  # must match the path in the sudoers rule exactly
+
+# common_update.py lives at the repo root, a sibling of this launcher/
+# folder and of node/ — every StockHive clone has both regardless of
+# which systemd unit(s) are installed on this particular machine.
+if REPO_DIR not in sys.path:
+    sys.path.insert(0, REPO_DIR)
+import common_update
 
 nodes_db.init_db()
 discovery.start(PUBLIC_PORT)
@@ -270,6 +279,48 @@ def api_expiring():
     return jsonify(merged)
 
 
+VERSION_FETCH_TIMEOUT = 2.0  # seconds, per node
+
+
+def _fetch_node_version(node: dict):
+    """Fetches one node's /api/version the same way _fetch_node_expiring
+    fetches /api/expiring — via the node's advertised url, swallowing any
+    failure so one slow/unreachable node can't hold up the others or the
+    page that's waiting on this."""
+    if not node.get("url"):
+        return node["id"], None
+    try:
+        r = requests.get(f"{node['url']}/api/version", timeout=VERSION_FETCH_TIMEOUT)
+        r.raise_for_status()
+        return node["id"], r.json()
+    except Exception:
+        return node["id"], None
+
+
+@app.get("/api/node-versions")
+def api_node_versions():
+    """Per-node build/update status for the Manage Nodes table. Split out
+    from /settings itself (which stays local-DB-only and fast) so this
+    page always renders immediately — the table's Version column fills
+    in afterwards via this endpoint, same as each node's own Settings
+    page fills in its "update available" line after load."""
+    nodes = [_format_node(r) for r in nodes_db.list_nodes(include_deleted=False) if r["is_online"]]
+    if not nodes:
+        return jsonify({})
+
+    with ThreadPoolExecutor(max_workers=max(1, len(nodes))) as pool:
+        results = dict(pool.map(_fetch_node_version, nodes))
+    return jsonify(results)
+
+
+@app.get("/api/version")
+def api_version():
+    """Launcher's own current build + update-available status — fetched
+    asynchronously by the Settings page's Device card so a slow/offline
+    git fetch never delays the page itself."""
+    return jsonify(common_update.check_remote_update(REPO_DIR, GIT_BIN))
+
+
 @app.get("/debug/mdns")
 def debug_mdns():
     return jsonify(discovery.get_debug_state())
@@ -280,48 +331,26 @@ def debug_mdns():
 # ============================================================
 
 def _get_git_build() -> str:
-    try:
-        result = subprocess.run(
-            [GIT_BIN, "rev-parse", "--short", "HEAD"],
-            cwd=REPO_DIR, capture_output=True, text=True, timeout=5,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
-    except Exception:
-        pass
-    return "unknown"
+    return common_update.get_current_build(REPO_DIR, GIT_BIN)
 
 
-# Set by _delayed_restart's background thread if `sudo systemctl restart`
-# itself fails (e.g. a stale/missing sudoers rule) — the request that
-# triggered it already got its optimistic "Restarting…" redirect by then,
-# so this is surfaced the next time /settings loads instead. A failure
-# here means the process never actually restarted: the build hash can
-# show a new commit while the running worker still has the old code
-# loaded, with no visible error otherwise.
-_last_restart_error = None
+def _sibling_node_service():
+    """If a node is also installed on this machine out of this same git
+    clone (the StockHiveTest-style combo setup), pulling here changes
+    code it's running too."""
+    return common_update.find_sibling_service(REPO_DIR, NODE_SERVICE_NAME, "node")
 
 
-def _delayed_restart(delay: float = 1.0) -> None:
-    """Restarts the launcher's own systemd service from a background
+def _delayed_restart(delay: float = 1.0, also_restart=None) -> None:
+    """Restarts the launcher's own systemd service (and, when given, any
+    sibling service sharing this same repo clone) from a background
     thread after a short delay, so the HTTP response announcing the
     restart has time to actually reach the browser first — doing this
     inline in the request thread would have systemctl kill the very
     process trying to run it. Relies on the passwordless sudoers entry
     setup.sh installs for exactly this command."""
-    def _run():
-        global _last_restart_error
-        time.sleep(delay)
-        try:
-            result = subprocess.run(
-                [SUDO_BIN, SYSTEMCTL_BIN, "restart", SERVICE_NAME],
-                capture_output=True, text=True, timeout=30,
-            )
-            if result.returncode != 0:
-                _last_restart_error = (result.stderr or result.stdout or f"exit code {result.returncode}").strip()
-        except Exception as e:
-            _last_restart_error = str(e)
-    threading.Thread(target=_run, daemon=True).start()
+    services = [SERVICE_NAME] + (also_restart or [])
+    common_update.schedule_restart(services, SUDO_BIN, SYSTEMCTL_BIN, delay=delay)
 
 
 def _delayed_poweroff(delay: float = 1.0) -> None:
@@ -339,18 +368,23 @@ def system_restart():
 
 @app.post("/system/update")
 def system_update():
-    try:
-        subprocess.run(
-            [GIT_BIN, "pull"], cwd=REPO_DIR, check=True,
-            capture_output=True, text=True, timeout=60,
+    ok, detail = common_update.pull_latest(REPO_DIR, GIT_BIN)
+    if not ok:
+        return redirect(f"/settings?msgtype=danger&msg=Update%20failed%3A%20{quote(detail[:300])}")
+
+    ok, detail = common_update.pip_install_requirements(VENV_PIP, os.path.join(BASE_DIR, "requirements.txt"))
+    if not ok:
+        return redirect(f"/settings?msgtype=danger&msg=Dependency%20install%20failed%3A%20{quote(detail[:300])}")
+
+    common_update.check_remote_update(REPO_DIR, GIT_BIN, force=True)
+
+    sibling = _sibling_node_service()
+    if sibling:
+        _delayed_restart(also_restart=[sibling])
+        return redirect(
+            "/settings?msgtype=ok&msg=Updated%20to%20latest%20build%20%E2%80%94%20this%20machine%20also%20runs%20"
+            "a%20node%20from%20the%20same%20code%2C%20restarting%20both%E2%80%A6"
         )
-        subprocess.run(
-            [VENV_PIP, "install", "-r", os.path.join(BASE_DIR, "requirements.txt"), "--quiet"],
-            check=True, capture_output=True, text=True, timeout=180,
-        )
-    except Exception as e:
-        detail = (getattr(e, "stderr", None) or str(e) or "").replace("\n", " ").strip()
-        return redirect(f"/settings?msgtype=danger&msg=Update%20failed%3A%20{quote(detail[:200])}")
 
     _delayed_restart()
     return redirect("/settings?msgtype=ok&msg=Updated%20to%20latest%20build%20%E2%80%94%20restarting%E2%80%A6")
@@ -430,13 +464,15 @@ SETTINGS_HTML = """
       <span style="color:var(--muted);font-size:13px;">Deleting a node hides its tile permanently, even if it comes back online.</span>
     </div>
     <table>
-      <thead><tr><th>Label</th><th>Status</th><th>IP</th><th></th></tr></thead>
+      <thead><tr><th>Label</th><th>Status</th><th>IP</th><th>Version</th><th></th><th></th></tr></thead>
       <tbody>
         {% for n in nodes %}
         <tr>
           <td>{{ n.label }}</td>
           <td><span class="pill {{ 'up' if n.is_online else 'down' }}">{{ 'Online' if n.is_online else 'Offline since ' + (n.offline_since or '—') }}</span></td>
           <td>{{ n.ip or '—' }}</td>
+          <td id="version-{{ n.id }}" style="color:var(--muted);">{{ '—' if n.is_online else 'offline' }}</td>
+          <td>{% if n.url %}<a class="btn" href="{{ n.url }}/settings">Settings</a>{% endif %}</td>
           <td>
             <form method="post" action="/settings/nodes/{{ n.id }}/delete" onsubmit="return confirm('Permanently remove this node from the launcher?');">
               <button class="btn btnDanger" type="submit">Delete</button>
@@ -444,7 +480,7 @@ SETTINGS_HTML = """
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="4" style="color:var(--muted);">No nodes discovered yet.</td></tr>
+        <tr><td colspan="6" style="color:var(--muted);">No nodes discovered yet.</td></tr>
         {% endfor %}
       </tbody>
     </table>
@@ -453,6 +489,7 @@ SETTINGS_HTML = """
   <div class="card">
     <h2 style="margin-bottom:10px;">Device</h2>
     <div style="color:var(--muted);">Build: <span class="mono">{{ build }}</span></div>
+    <div style="color:var(--muted);margin-top:4px;" id="updateStatus">Checking for updates&hellip;</div>
     <div class="btnRow" style="margin-top:12px;">
       <form method="post" action="/system/restart" onsubmit="return confirm('Restart the StockHive service on this device?');">
         <button class="btn" type="submit">Restart Service</button>
@@ -468,6 +505,44 @@ SETTINGS_HTML = """
 
   <a class="btn" href="/">Back to Launcher</a>
 </div>
+<script>
+(function() {
+  var el = document.getElementById('updateStatus');
+  if (el) {
+    fetch('/api/version').then(function(r) { return r.json(); }).then(function(v) {
+      if (v.error) {
+        el.textContent = 'Unable to check for updates (' + v.error + ')';
+      } else if (v.update_available) {
+        el.textContent = 'Update available: ' + v.latest + ' (currently on ' + v.current + ')';
+        el.style.color = '#f7c948';
+        el.style.fontWeight = '700';
+      } else {
+        el.textContent = 'Up to date.';
+      }
+    }).catch(function() {
+      el.textContent = 'Unable to check for updates.';
+    });
+  }
+
+  fetch('/api/node-versions').then(function(r) { return r.json(); }).then(function(versions) {
+    Object.keys(versions).forEach(function(nodeId) {
+      var cell = document.getElementById('version-' + nodeId);
+      if (!cell) return;
+      var v = versions[nodeId];
+      if (!v) {
+        cell.textContent = 'unreachable';
+        return;
+      }
+      if (v.update_available) {
+        cell.textContent = v.current + ' (update available)';
+        cell.style.color = '#f7c948';
+      } else {
+        cell.textContent = v.current || 'unknown';
+      }
+    });
+  }).catch(function() {});
+})();
+</script>
 </body>
 </html>
 """
@@ -475,9 +550,18 @@ SETTINGS_HTML = """
 
 @app.get("/settings")
 def settings_page():
-    global _last_restart_error
-    restart_error = _last_restart_error
-    _last_restart_error = None
+    # Checked for both this service and the sibling node: when a combo
+    # update restarts both, it's this same process that actually ran the
+    # sibling's restart command and is the only one that would know if
+    # that specific call failed — the node's own process never sees it,
+    # since each service is a separate OS process with its own in-memory
+    # common_update state.
+    restart_failures = []
+    for svc in (SERVICE_NAME, NODE_SERVICE_NAME):
+        err = common_update.pop_restart_error(svc)
+        if err:
+            restart_failures.append(f"{svc}: {err}")
+    restart_error = " | ".join(restart_failures) if restart_failures else None
     return render_template_string(
         SETTINGS_HTML,
         build=_get_git_build(),

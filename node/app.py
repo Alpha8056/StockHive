@@ -5,6 +5,7 @@ VERSION = "2.0.0"
 
 import os
 import subprocess
+import sys
 import threading
 import time
 import shutil
@@ -202,6 +203,7 @@ UPLOAD_TMP = os.path.join(BASE_DIR, "inventory.restore.tmp")
 REPO_DIR = os.path.dirname(BASE_DIR)
 VENV_PIP = os.path.join(BASE_DIR, "venv", "bin", "pip")
 SERVICE_NAME = "stockpi-node.service"
+LAUNCHER_SERVICE_NAME = "stockpi-launcher.service"
 
 # Absolute paths, not bare command names — the systemd unit sets PATH to
 # just this app's venv (so gunicorn resolves the right python/pip), which
@@ -210,53 +212,39 @@ GIT_BIN = "/usr/bin/git"
 SUDO_BIN = "/usr/bin/sudo"
 SYSTEMCTL_BIN = "/bin/systemctl"  # must match the path in the sudoers rule exactly
 
+# common_update.py lives at the repo root, a sibling of this node/ folder
+# and of launcher/ — every StockHive clone has both regardless of which
+# systemd unit(s) are installed on this particular machine, so this path
+# is reachable the same way from either app.
+if REPO_DIR not in sys.path:
+    sys.path.insert(0, REPO_DIR)
+import common_update
+
 # ============================================================
 # SECTION: Build Info + Device Controls (Settings > Device)
 # ============================================================
 
 def _get_git_build() -> str:
-    try:
-        result = subprocess.run(
-            [GIT_BIN, "rev-parse", "--short", "HEAD"],
-            cwd=REPO_DIR, capture_output=True, text=True, timeout=5,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
-    except Exception:
-        pass
-    return "unknown"
+    return common_update.get_current_build(REPO_DIR, GIT_BIN)
 
 
-# Set by _delayed_restart's background thread if `sudo systemctl restart`
-# itself fails (e.g. a stale/missing sudoers rule) — the request that
-# triggered it already got its optimistic "Restarting…" redirect by then,
-# so this is surfaced the next time /settings loads instead. A failure
-# here means the process never actually restarted: the build hash can
-# show a new commit while the running worker still has the old code
-# loaded, with no visible error otherwise.
-_last_restart_error = None
+def _sibling_launcher_service():
+    """If the launcher is also installed on this machine out of this
+    same git clone (the StockHiveTest-style combo setup), pulling here
+    changes code it's running too."""
+    return common_update.find_sibling_service(REPO_DIR, LAUNCHER_SERVICE_NAME, "launcher")
 
 
-def _delayed_restart(delay: float = 1.0) -> None:
-    """Restarts this node's own systemd service from a background thread
-    after a short delay, so the HTTP response announcing the restart has
-    time to actually reach the browser first — doing this inline in the
-    request thread would have systemctl kill the very process trying to
-    run it. Relies on the passwordless sudoers entry setup.sh installs
-    for exactly this command."""
-    def _run():
-        global _last_restart_error
-        time.sleep(delay)
-        try:
-            result = subprocess.run(
-                [SUDO_BIN, SYSTEMCTL_BIN, "restart", SERVICE_NAME],
-                capture_output=True, text=True, timeout=30,
-            )
-            if result.returncode != 0:
-                _last_restart_error = (result.stderr or result.stdout or f"exit code {result.returncode}").strip()
-        except Exception as e:
-            _last_restart_error = str(e)
-    threading.Thread(target=_run, daemon=True).start()
+def _delayed_restart(delay: float = 1.0, also_restart=None) -> None:
+    """Restarts this node's own systemd service (and, when given, any
+    sibling service sharing this same repo clone) from a background
+    thread after a short delay, so the HTTP response announcing the
+    restart has time to actually reach the browser first — doing this
+    inline in the request thread would have systemctl kill the very
+    process trying to run it. Relies on the passwordless sudoers entry
+    setup.sh installs for exactly this command."""
+    services = [SERVICE_NAME] + (also_restart or [])
+    common_update.schedule_restart(services, SUDO_BIN, SYSTEMCTL_BIN, delay=delay)
 
 
 def _delayed_poweroff(delay: float = 1.0) -> None:
@@ -1469,6 +1457,16 @@ def api_expiring_count():
     return {"count": len(items), "urgent": urgent}
 
 
+@app.route("/api/version")
+def api_version():
+    """Current build + update-available status, consumed by this node's
+    own Settings page (async, so a slow/offline git fetch never delays
+    the page itself) and by the launcher's Manage Nodes list."""
+    status = common_update.check_remote_update(REPO_DIR, GIT_BIN)
+    status["label"] = labels.get_node_label()
+    return jsonify(status)
+
+
 @app.route("/api/expiring")
 def api_expiring():
     """
@@ -1609,12 +1607,21 @@ def tools_page():
 
 @app.route("/settings", methods=["GET"])
 def settings_page():
-    global _last_restart_error
     status_html = _page_status_html()
-    if _last_restart_error:
-        detail = _last_restart_error.replace("<", "&lt;").replace(">", "&gt;")
+    # Checked for both this service and the sibling launcher: when a combo
+    # update restarts both, it's this same process that actually ran
+    # `sudo systemctl restart stockpi-launcher.service` and would be the
+    # only one to know if that specific call failed — the launcher's own
+    # process never sees it, since each service is a separate OS process
+    # with its own in-memory common_update state.
+    restart_failures = []
+    for svc in (SERVICE_NAME, LAUNCHER_SERVICE_NAME):
+        err = common_update.pop_restart_error(svc)
+        if err:
+            restart_failures.append(f"{svc}: {err}")
+    if restart_failures:
+        detail = " | ".join(restart_failures).replace("<", "&lt;").replace(">", "&gt;")
         status_html += f"<div id='restartFailBanner' class='status danger'>Restart/update did not take effect — the service is still running the old build. {detail}</div>"
-        _last_restart_error = None
     L = labels.get_labels()
     ident = identity.snapshot()
 
@@ -1694,6 +1701,7 @@ def settings_page():
       <div class="card">
         <h2>Device</h2>
         <div class="muted">Build: <span class="mono">{_get_git_build()}</span></div>
+        <div class="muted" id="updateStatus" style="margin-top:4px;">Checking for updates&hellip;</div>
         <div class="btnRow" style="margin-top:12px;">
           <form class="inline" method="post" action="/system/restart" onsubmit="return confirm('Restart the StockHive service on this device?');">
             <button class="btn btn-wide" type="submit">Restart Service</button>
@@ -1708,6 +1716,25 @@ def settings_page():
       </div>
 
     </div></div>
+    <script>
+    (function() {{
+      var el = document.getElementById('updateStatus');
+      if (!el) return;
+      fetch('/api/version').then(function(r) {{ return r.json(); }}).then(function(v) {{
+        if (v.error) {{
+          el.textContent = 'Unable to check for updates (' + v.error + ')';
+        }} else if (v.update_available) {{
+          el.textContent = 'Update available: ' + v.latest + ' (currently on ' + v.current + ')';
+          el.style.color = 'var(--warn)';
+          el.style.fontWeight = '800';
+        }} else {{
+          el.textContent = 'Up to date.';
+        }}
+      }}).catch(function() {{
+        el.textContent = 'Unable to check for updates.';
+      }});
+    }})();
+    </script>
     """
 
 
@@ -1719,18 +1746,26 @@ def system_restart():
 
 @app.route("/system/update", methods=["POST"])
 def system_update():
-    try:
-        subprocess.run(
-            [GIT_BIN, "pull"], cwd=REPO_DIR, check=True,
-            capture_output=True, text=True, timeout=60,
+    ok, detail = common_update.pull_latest(REPO_DIR, GIT_BIN)
+    if not ok:
+        return redirect(f"/settings?msgtype=danger&msg=Update%20failed%3A%20{quote(detail[:300])}")
+
+    ok, detail = common_update.pip_install_requirements(VENV_PIP, os.path.join(BASE_DIR, "requirements.txt"))
+    if not ok:
+        return redirect(f"/settings?msgtype=danger&msg=Dependency%20install%20failed%3A%20{quote(detail[:300])}")
+
+    # Refresh the cached "update available" check immediately so /api/version
+    # reflects the new build right away instead of the stale pre-pull answer
+    # sticking around for up to _UPDATE_CACHE_SECONDS.
+    common_update.check_remote_update(REPO_DIR, GIT_BIN, force=True)
+
+    sibling = _sibling_launcher_service()
+    if sibling:
+        _delayed_restart(also_restart=[sibling])
+        return redirect(
+            "/settings?msgtype=ok&msg=Updated%20to%20latest%20build%20%E2%80%94%20this%20machine%20also%20runs%20"
+            "the%20launcher%20from%20the%20same%20code%2C%20restarting%20both%E2%80%A6"
         )
-        subprocess.run(
-            [VENV_PIP, "install", "-r", os.path.join(BASE_DIR, "requirements.txt"), "--quiet"],
-            check=True, capture_output=True, text=True, timeout=180,
-        )
-    except Exception as e:
-        detail = (getattr(e, "stderr", None) or str(e) or "").replace("\n", " ").strip()
-        return redirect(f"/settings?msgtype=danger&msg=Update%20failed%3A%20{quote(detail[:200])}")
 
     _delayed_restart()
     return redirect("/settings?msgtype=ok&msg=Updated%20to%20latest%20build%20%E2%80%94%20restarting%E2%80%A6")

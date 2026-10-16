@@ -35,6 +35,14 @@ info "Repo directory : $REPO_DIR"
 info "Installing for user: $REAL_USER (home: $REAL_HOME)"
 echo ""
 
+# Avoids `git pull --ff-only` (used by Settings > Update) being blocked by
+# a spurious "local changes" error from executable-bit differences picked
+# up across filesystems (e.g. this repo's own Windows dev clone) — the
+# update flow re-applies this on every pull too, so this line mainly
+# matters for anyone reading the repo state before ever clicking Update.
+# Non-fatal (|| true) — not worth aborting the whole install over.
+sudo -u "$REAL_USER" git -C "$REPO_DIR" config core.fileMode false || true
+
 # =============================================================================
 # 1. WHAT TO INSTALL
 # =============================================================================
@@ -157,6 +165,13 @@ PYEOF
 $REAL_USER ALL=(ALL) NOPASSWD: /bin/systemctl restart stockpi-node.service
 $REAL_USER ALL=(ALL) NOPASSWD: /bin/systemctl poweroff
 EOF
+  if $INSTALL_LAUNCHER; then
+    # Both installed on this one machine out of the same clone (the
+    # StockHiveTest-style combo setup) — Settings > Update on the node
+    # also pulls the launcher's code, so it needs to be able to restart
+    # that service too, not just its own.
+    echo "$REAL_USER ALL=(ALL) NOPASSWD: /bin/systemctl restart stockpi-launcher.service" >> /etc/sudoers.d/stockpi-node
+  fi
   chmod 0440 /etc/sudoers.d/stockpi-node
   success "stockpi-node.service installed and started on port $NODE_PORT."
 }
@@ -212,6 +227,12 @@ EOF
 $REAL_USER ALL=(ALL) NOPASSWD: /bin/systemctl restart stockpi-launcher.service
 $REAL_USER ALL=(ALL) NOPASSWD: /bin/systemctl poweroff
 EOF
+  if $INSTALL_NODE; then
+    # Mirrors the node side: both services share this one clone, so the
+    # launcher's own Settings > Update needs permission to restart the
+    # node too when it's the one that pulls new code.
+    echo "$REAL_USER ALL=(ALL) NOPASSWD: /bin/systemctl restart stockpi-node.service" >> /etc/sudoers.d/stockpi-launcher
+  fi
   chmod 0440 /etc/sudoers.d/stockpi-launcher
   success "stockpi-launcher.service installed and started on port $LAUNCHER_PORT."
 }
