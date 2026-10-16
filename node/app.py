@@ -415,12 +415,18 @@ def _styles():
       .invHead{ color:var(--muted); font-weight:900; background:rgba(255,255,255,0.03); }
 
       .invBody, .invLeft, .invMeta, .invQtyBlock{ display:contents; }
-      .invCell-item{ grid-column:1; min-width:0; }
-      .invCell-location{ grid-column:2; }
-      .invCell-qty{ grid-column:3; }
-      .invCell-low{ grid-column:4; }
-      .invCell-expires{ grid-column:5; }
-      .invCell-actions{ grid-column:6; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+      /* grid-row:1 on every cell, not just grid-column, because Qty/Low
+         come after Actions in DOM order (nested under .invQtyBlock,
+         which is last, so the card layout can group them together) —
+         without it, the grid's sparse auto-placement already has its
+         cursor past columns 3/4 by the time it reaches them and drops
+         them onto an implicit row 2 instead of back-filling row 1. */
+      .invCell-item{ grid-column:1; grid-row:1; min-width:0; }
+      .invCell-location{ grid-column:2; grid-row:1; }
+      .invCell-qty{ grid-column:3; grid-row:1; }
+      .invCell-low{ grid-column:4; grid-row:1; }
+      .invCell-expires{ grid-column:5; grid-row:1; }
+      .invCell-actions{ grid-column:6; grid-row:1; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
 
       .invLabel{ display:none; }
       .invQtyLabel{ display:none; }
