@@ -13,7 +13,7 @@ import socket
 from datetime import date, datetime
 from urllib.parse import quote
 
-from flask import Flask, request, redirect, send_file, Response, url_for, render_template
+from flask import Flask, request, redirect, send_file, Response, url_for, render_template, jsonify
 
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -1448,6 +1448,47 @@ def expiring_undismiss():
 def api_expiring_count():
     items, urgent = _expiring_summary()
     return {"count": len(items), "urgent": urgent}
+
+
+@app.route("/api/expiring")
+def api_expiring():
+    """
+    Expiring items as JSON for an arbitrary look-ahead window (used by the
+    launcher's carousel, which wants 7 days regardless of this node's own
+    EXPIRATION_WARN_DAYS badge threshold). level/label are computed here
+    against the requested window, not via _expiration_status() — that
+    helper is hardwired to EXPIRATION_WARN_DAYS and would silently drop
+    labels for anything past that, even inside a wider requested window.
+    """
+    try:
+        days = int(request.args.get("days", EXPIRATION_WARN_DAYS))
+    except (TypeError, ValueError):
+        days = EXPIRATION_WARN_DAYS
+    if days < 0:
+        days = EXPIRATION_WARN_DAYS
+
+    result = []
+    for barcode, name, location, qty, expiration_date in get_expiring_items(days):
+        d = _parse_date(expiration_date)
+        delta = (d - date.today()).days if d else None
+        if delta is None:
+            level, label = "soon", ""
+        elif delta < 0:
+            level, label = "expired", f"Expired {abs(delta)}d ago"
+        elif delta == 0:
+            level, label = "today", "Expires today"
+        else:
+            level, label = "soon", f"Expires in {delta}d"
+        result.append({
+            "name": name,
+            "location": location,
+            "quantity": int(qty),
+            "expiration_date": expiration_date,
+            "days": delta,
+            "level": level,
+            "label": label,
+        })
+    return jsonify(result)
 
 
 # ============================================================

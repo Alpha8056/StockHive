@@ -11,8 +11,10 @@ import os
 import subprocess
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import quote
 
+import requests
 from flask import Flask, jsonify, redirect, render_template_string, request, send_from_directory
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -224,6 +226,48 @@ def api_nodes():
 def api_delete_node(node_id):
     nodes_db.delete_node(node_id)
     return jsonify({"ok": True})
+
+
+EXPIRING_FETCH_TIMEOUT = 2.0  # seconds, per node
+
+
+def _fetch_node_expiring(node: dict):
+    """Fetches one node's /api/expiring via the exact same url _format_node
+    already builds for its tile link (not a raw ip:port guess — the node's
+    gunicorn itself only binds 127.0.0.1, so the reachable address is
+    whatever nginx/mDNS actually advertised, same as everything else here
+    uses). Returns [] on any failure — an unreachable/slow node should
+    never break the carousel for everyone else."""
+    if not node.get("url"):
+        return []
+    try:
+        r = requests.get(f"{node['url']}/api/expiring", params={"days": 7}, timeout=EXPIRING_FETCH_TIMEOUT)
+        r.raise_for_status()
+        items = r.json()
+    except Exception:
+        return []
+    for item in items:
+        item["node_label"] = node["label"]
+    return items
+
+
+@app.get("/api/expiring")
+def api_expiring():
+    nodes = [_format_node(r) for r in nodes_db.list_nodes(include_deleted=False) if r["is_online"]]
+    if not nodes:
+        return jsonify([])
+
+    # Queried in parallel so total wait is ~EXPIRING_FETCH_TIMEOUT
+    # regardless of node count, not that timeout multiplied by each node
+    # (this runs on gunicorn's single sync worker — a sequential fan-out
+    # over several nodes would otherwise stall every other request on the
+    # launcher for the whole sum).
+    with ThreadPoolExecutor(max_workers=max(1, len(nodes))) as pool:
+        results = list(pool.map(_fetch_node_expiring, nodes))
+
+    merged = [item for items in results for item in items]
+    merged.sort(key=lambda it: it.get("expiration_date") or "9999-99-99")
+    return jsonify(merged)
 
 
 @app.get("/debug/mdns")

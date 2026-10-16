@@ -40,10 +40,48 @@ body{
 }
 .settingsBtn:hover{ background:var(--btnHover); }
 
-.clockBlock{ text-align:center; margin:10px 0 28px; }
+.clockBlock{ text-align:center; margin:0; }
 .clockBlock .time{ font-size:48px; font-weight:900; letter-spacing:.5px; line-height:1; }
 .clockBlock .date{ margin-top:6px; font-size:17px; font-weight:700; color:var(--muted); }
 @media (max-width:560px){ .clockBlock .time{ font-size:38px; } }
+
+.carousel{
+  position:relative; margin:10px 0 28px; border-radius:20px; overflow:hidden;
+  background:linear-gradient(165deg, var(--panel), var(--panel2));
+  border:1px solid var(--border); box-shadow:0 14px 34px var(--shadow);
+  touch-action:pan-y;
+}
+.carouselTrack{ display:flex; transition:transform .3s ease; }
+.carouselSlide{
+  flex:0 0 100%; min-width:100%; box-sizing:border-box;
+  padding:30px 20px 22px; cursor:pointer; user-select:none;
+}
+.carouselDots{ display:flex; justify-content:center; gap:8px; padding:4px 0 16px; }
+.carouselDot{
+  width:8px; height:8px; border-radius:999px; background:var(--border); cursor:pointer;
+  transition:background .15s ease, transform .15s ease;
+}
+.carouselDot.active{ background:#60a5fa; transform:scale(1.3); }
+
+.slideTitle{
+  font-size:13px; font-weight:900; color:var(--muted); text-transform:uppercase;
+  letter-spacing:.08em; text-align:center; margin-bottom:16px;
+}
+.expList{ display:flex; flex-direction:column; gap:4px; max-height:220px; overflow-y:auto; }
+.expRow{
+  display:flex; justify-content:space-between; align-items:baseline; gap:12px;
+  padding:9px 0; border-top:1px solid var(--border);
+}
+.expRow:first-child{ border-top:none; }
+.expName{ font-weight:800; font-size:15px; }
+.expMeta{ color:var(--muted); font-size:12px; margin-top:2px; }
+.expLabel{ font-weight:800; font-size:13px; white-space:nowrap; }
+.expLabel.expired, .expLabel.today{ color:#f87171; }
+.expLabel.soon{ color:#f59e0b; }
+.glanceTemp{ font-size:40px; font-weight:900; line-height:1; text-align:center; }
+.glanceCond{ text-align:center; color:var(--muted); font-size:15px; font-weight:700; margin-top:6px; }
+.glanceSub{ text-align:center; color:var(--muted); font-size:13px; margin-top:10px; }
+.glanceHoliday{ text-align:center; margin-top:16px; font-size:14px; font-weight:800; color:#a78bfa; }
 
 .searchRow{ margin-bottom:20px; text-align:center; }
 #search{
@@ -124,9 +162,24 @@ body{
     <a class="settingsBtn" href="/settings">⚙ Settings</a>
   </div>
 
-  <div class="clockBlock">
-    <div class="time" id="time">--:--</div>
-    <div class="date" id="date">---</div>
+  <div class="carousel" id="carousel">
+    <div class="carouselTrack" id="carouselTrack">
+      <div class="carouselSlide">
+        <div class="clockBlock">
+          <div class="time" id="time">--:--</div>
+          <div class="date" id="date">---</div>
+        </div>
+      </div>
+      <div class="carouselSlide">
+        <div class="slideTitle">Expiring Soon</div>
+        <div id="expiringBody" class="expList"><div class="empty">Loading…</div></div>
+      </div>
+      <div class="carouselSlide">
+        <div class="slideTitle">Today at a Glance</div>
+        <div id="glanceBody"><div class="empty">Loading…</div></div>
+      </div>
+    </div>
+    <div class="carouselDots" id="carouselDots"></div>
   </div>
 
   <div class="searchRow">
@@ -158,6 +211,174 @@ function tick(){
 }
 tick(); setInterval(tick, 1000);
 document.getElementById("hostline").textContent = location.host;
+
+// ===== Carousel: date/time, expiring soon, today at a glance =====
+const SLIDE_COUNT = 3;
+const AUTO_ADVANCE_MS = 10000;
+const PAUSE_AFTER_MANUAL_MS = 30000;
+let currentSlide = 0;
+let lastInteraction = 0;
+
+const carouselTrack = document.getElementById("carouselTrack");
+const carouselDots = document.getElementById("carouselDots");
+
+function buildDots(){
+  carouselDots.innerHTML = "";
+  for(let i = 0; i < SLIDE_COUNT; i++){
+    const dot = document.createElement("div");
+    dot.className = "carouselDot" + (i === 0 ? " active" : "");
+    dot.addEventListener("click", () => goToSlide(i, true));
+    carouselDots.appendChild(dot);
+  }
+}
+buildDots();
+
+function goToSlide(index, manual){
+  currentSlide = ((index % SLIDE_COUNT) + SLIDE_COUNT) % SLIDE_COUNT;
+  carouselTrack.style.transform = `translateX(-${currentSlide * 100}%)`;
+  [...carouselDots.children].forEach((dot, i) => dot.classList.toggle("active", i === currentSlide));
+  if(manual) lastInteraction = Date.now();
+}
+
+setInterval(() => {
+  if(Date.now() - lastInteraction > PAUSE_AFTER_MANUAL_MS) goToSlide(currentSlide + 1, false);
+}, AUTO_ADVANCE_MS);
+
+// Pointer Events cover touch (tap + swipe) and mouse in one code path —
+// avoids the double-fire you'd get mixing touchend + a synthetic click.
+let pointerDown = false, pointerStartX = 0, pointerStartY = 0, pointerMoved = false;
+carouselTrack.addEventListener("pointerdown", (e) => {
+  pointerDown = true;
+  pointerStartX = e.clientX;
+  pointerStartY = e.clientY;
+  pointerMoved = false;
+  // Keeps move/up events targeting this element even if the finger drifts
+  // outside its bounds mid-swipe — without this, a swipe that ends off
+  // the carousel never fires pointerup here and pointerDown gets stuck.
+  carouselTrack.setPointerCapture(e.pointerId);
+});
+carouselTrack.addEventListener("pointermove", (e) => {
+  if(!pointerDown) return;
+  if(Math.abs(e.clientX - pointerStartX) > 10 || Math.abs(e.clientY - pointerStartY) > 10) pointerMoved = true;
+});
+carouselTrack.addEventListener("pointerup", (e) => {
+  if(!pointerDown) return;
+  pointerDown = false;
+  const dx = e.clientX - pointerStartX;
+  if(Math.abs(dx) > 40){
+    goToSlide(currentSlide + (dx < 0 ? 1 : -1), true);
+  } else if(!pointerMoved){
+    goToSlide(currentSlide + 1, true);
+  }
+});
+carouselTrack.addEventListener("pointercancel", () => { pointerDown = false; });
+
+async function loadExpiring(){
+  const body = document.getElementById("expiringBody");
+  try {
+    const r = await fetch("/api/expiring");
+    if(!r.ok) return;
+    const items = await r.json();
+    if(!items.length){
+      body.innerHTML = '<div class="empty">Nothing expiring soon.</div>';
+      return;
+    }
+    body.innerHTML = items.map(it => `
+      <div class="expRow">
+        <div>
+          <div class="expName">${esc(it.name)}</div>
+          <div class="expMeta">${esc(it.node_label || "")} &bull; ${esc(it.location || "")} &bull; qty ${esc(it.quantity)}</div>
+        </div>
+        <div class="expLabel ${esc(it.level || "soon")}">${esc(it.label || it.expiration_date || "")}</div>
+      </div>
+    `).join("");
+  } catch(e){}
+}
+loadExpiring();
+setInterval(loadExpiring, 60000);
+
+// Built-in US holiday list — no external service. Fixed-date ones plus
+// the common floating ones (Nth weekday of a month), computed locally.
+const FIXED_HOLIDAYS = [
+  [0, 1, "New Year's Day"],
+  [1, 14, "Valentine's Day"],
+  [5, 19, "Juneteenth"],
+  [6, 4, "Independence Day"],
+  [9, 31, "Halloween"],
+  [10, 11, "Veterans Day"],
+  [11, 25, "Christmas Day"],
+];
+
+function nthWeekdayOfMonth(year, month, weekday, n){
+  const d = new Date(year, month, 1);
+  let count = 0;
+  while(true){
+    if(d.getDay() === weekday){
+      count++;
+      if(count === n) return new Date(d);
+    }
+    d.setDate(d.getDate() + 1);
+  }
+}
+function lastWeekdayOfMonth(year, month, weekday){
+  const d = new Date(year, month + 1, 0);
+  while(d.getDay() !== weekday) d.setDate(d.getDate() - 1);
+  return d;
+}
+function floatingHolidays(year){
+  return [
+    [nthWeekdayOfMonth(year, 0, 1, 3), "Martin Luther King Jr. Day"],
+    [nthWeekdayOfMonth(year, 1, 1, 3), "Presidents' Day"],
+    [nthWeekdayOfMonth(year, 4, 0, 2), "Mother's Day"],
+    [lastWeekdayOfMonth(year, 4, 1), "Memorial Day"],
+    [nthWeekdayOfMonth(year, 5, 0, 3), "Father's Day"],
+    [nthWeekdayOfMonth(year, 8, 1, 1), "Labor Day"],
+    [nthWeekdayOfMonth(year, 10, 4, 4), "Thanksgiving"],
+  ];
+}
+function sameDay(a, b){
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+function getHolidayLine(){
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  // Build both this year's and next year's list so a window spanning
+  // Dec 29-31 still finds the upcoming Jan 1.
+  const all = [];
+  for(const year of [today.getFullYear(), today.getFullYear() + 1]){
+    all.push(...FIXED_HOLIDAYS.map(([m, d, name]) => [new Date(year, m, d), name]));
+    all.push(...floatingHolidays(year));
+  }
+  for(let offset = 0; offset <= 3; offset++){
+    const check = new Date(today);
+    check.setDate(check.getDate() + offset);
+    const hit = all.find(([d]) => sameDay(d, check));
+    if(hit){
+      if(offset === 0) return `🎉 Today is ${hit[1]}`;
+      if(offset === 1) return `🎉 Tomorrow is ${hit[1]}`;
+      return `🎉 ${hit[1]} is in ${offset} days`;
+    }
+  }
+  return null;
+}
+
+function renderTodayGlance(d){
+  const wx = d.weather || {};
+  const body = document.getElementById("glanceBody");
+  if(!body) return;
+  let html = "";
+  if(wx.ok){
+    html += `<div class="glanceTemp">${esc(wx.temp)}</div>
+      <div class="glanceCond">${esc(wx.condition)}</div>
+      <div class="glanceSub">High/Low: <b>${esc(wx.hi)}</b>/<b>${esc(wx.lo)}</b> &bull; Precip: <b>${esc(wx.precip)}</b></div>`;
+  } else {
+    html += `<div class="glanceCond">Weather unavailable right now.</div>`;
+  }
+  const holiday = getHolidayLine();
+  if(holiday) html += `<div class="glanceHoliday">${esc(holiday)}</div>`;
+  body.innerHTML = html;
+}
+// ===== end carousel =====
 
 function renderGrid(nodes){
   const grid = document.getElementById("grid");
@@ -259,6 +480,7 @@ async function loadWeather(){
     if(!r.ok) return;
     const d = await r.json();
     document.getElementById("weatherSection").innerHTML = buildWeather(d);
+    renderTodayGlance(d);
   } catch(e){}
 }
 loadWeather();
