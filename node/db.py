@@ -235,6 +235,14 @@ def _migrate(conn):
     # image bytes themselves.
     _ensure_column(conn, "items", "photo", "photo TEXT")
 
+    # Ensure optional aisle column exists — free text (e.g. "A3", "7",
+    # "Produce"). Flat single-store column by design: if multi-store
+    # support ever happens, the natural move is a separate
+    # item_store_aisles(item_id, store_id, aisle) table, with this
+    # column becoming the no-store/default case — nothing here blocks
+    # that later migration.
+    _ensure_column(conn, "items", "aisle", "aisle TEXT")
+
     # Ensure events table exists
     _ensure_events_table(conn)
 

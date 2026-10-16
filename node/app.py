@@ -59,6 +59,9 @@ from inventory import (
     get_item_photo,
     set_item_photo,
     get_photos_map,
+    get_item_aisle,
+    set_item_aisle,
+    get_aisle_map,
     add_item,
     increment_existing,
     remove_one,
@@ -1112,6 +1115,7 @@ def edit_item_page():
         return redirect("/inventory?msgtype=danger&msg=Item%20not%20found")
     _, name, location, qty, low, expiration_date = item
     photo = get_item_photo(barcode)
+    aisle = get_item_aisle(barcode)
     status_html = _page_status_html()
 
     if photo:
@@ -1144,7 +1148,7 @@ def edit_item_page():
     {_styles()}{_auto_hide_banner_js()}
     <div class="wrap"><div class="container">
       <header>
-        <div><h1>Edit Item</h1><div class="sub">Update name &amp; expiration date</div></div>
+        <div><h1>Edit Item</h1><div class="sub">Update name, expiration date &amp; aisle</div></div>
         <a class="btn" href="/inventory">Back</a>
       </header>
       {status_html}
@@ -1162,6 +1166,12 @@ def edit_item_page():
           </div>
           <div class="fieldRow">
             <input type="date" name="expiration_date" value="{expiration_date or ''}">
+          </div>
+          <div class="fieldRow" style="margin-top:14px;margin-bottom:14px;">
+            <label style="color:var(--muted);font-size:14px;">Aisle (optional)</label>
+          </div>
+          <div class="fieldRow">
+            <input type="text" name="aisle" value="{aisle or ''}" placeholder="e.g. A3, 7, Produce">
           </div>
           <div class="fieldRow" style="margin-top:14px;margin-bottom:14px;">
             <label style="color:var(--muted);font-size:14px;">Photo (optional)</label>
@@ -1234,6 +1244,7 @@ def edit_item_save():
         barcode = (request.form.get("barcode", "") or "").strip()
         new_name = (request.form.get("name", "") or "").strip()
         expiration_date = (request.form.get("expiration_date", "") or "").strip()
+        aisle = (request.form.get("aisle", "") or "").strip()
         remove_photo = request.form.get("remove_photo") == "1"
         photo_file = request.files.get("photo")
     except RequestEntityTooLarge:
@@ -1260,6 +1271,7 @@ def edit_item_save():
     try:
         update_item_name(barcode, new_name)
         update_item_expiration(barcode, expiration_date)
+        set_item_aisle(barcode, aisle)
         return redirect(f"/inventory?msgtype=ok&msg=Saved%20{new_name.replace(' ', '%20')}")
     except Exception as e:
         return redirect(f"/inventory?msgtype=danger&msg=Error%3A%20{str(e).replace(' ', '%20')}")
@@ -1332,11 +1344,67 @@ def stats_page():
 # SECTION: Routes — Grocery List
 # ============================================================
 
+_AISLE_CODE_RE = re.compile(r"^([A-Za-z]*)[\s\-]*(\d+)$")
+
+
+def _aisle_sort_key(aisle):
+    """
+    Natural sort key for free-text aisle values, in four tiers:
+    lettered aisle codes first ("A2" before "A3" before "A10", letters
+    grouped so all A's come before any B's — numbers compared
+    numerically, not as strings, so "10" doesn't sort before "2"), then
+    plain-number aisles ("7"), then named aisles like "Produce"
+    (alphabetical among themselves), then items with no aisle set, last
+    of all. Case-insensitive, and tolerates an optional space/hyphen
+    between the letters and the number ("A 3", "A-3" count as aisle
+    codes too).
+    """
+    aisle = (aisle or "").strip()
+    if not aisle:
+        return (3, "", 0)
+    m = _AISLE_CODE_RE.match(aisle)
+    if m:
+        letters, digits = m.group(1).upper(), m.group(2)
+        if letters:
+            return (0, letters, int(digits))
+        return (1, "", int(digits))
+    return (2, aisle.lower(), 0)
+
+
+def _sort_by_aisle(items, aisle_map):
+    """Sorts (barcode, name, ...) rows by _aisle_sort_key on
+    aisle_map.get(barcode); stable otherwise, so items sharing a key
+    keep their original relative order."""
+    return sorted(items, key=lambda row: _aisle_sort_key(aisle_map.get(row[0])))
+
+
+def _grocery_text_lines(include_aisle: bool = True) -> list:
+    """Grocery list items, aisle-sorted, one "- Name" line each (or
+    "- Name (Aisle)" when include_aisle, the default). Sorting applies
+    either way; include_aisle=False keeps the exact plain line format
+    some callers need unchanged — e.g. /export/grocery.raw, which other
+    tools may already be parsing."""
+    aisle_map = get_aisle_map()
+    items = _sort_by_aisle(get_grocery_list(), aisle_map)
+    if not items:
+        return ["(Empty)"]
+    lines = []
+    for row in items:
+        barcode, name = row[0], row[1]
+        if include_aisle:
+            aisle = aisle_map.get(barcode)
+            lines.append(f"- {name} ({aisle})" if aisle else f"- {name}")
+        else:
+            lines.append(f"- {name}")
+    return lines
+
+
 @app.route("/grocery-list")
 def grocery_list_page():
     zone, shelf, _loc_map = _selected_zone_shelf()
     status_html = _page_status_html()
-    grocery_items = get_grocery_list()
+    aisle_map = get_aisle_map()
+    grocery_items = _sort_by_aisle(get_grocery_list(), aisle_map)
     low_items = get_low_stock()
 
     export_txt = "/export/grocery.txt"
@@ -1347,9 +1415,12 @@ def grocery_list_page():
     for row in grocery_items:
         barcode = row[0]
         name = row[1]
+        aisle = aisle_map.get(barcode)
+        aisle_html = f'<span class="chip">{aisle}</span>' if aisle else ""
         lis += f"""
         <li style="margin: 10px 0; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
           <span>{name}</span>
+          {aisle_html}
           <form class="inline" method="post" action="/grocery-remove">
             <input type="hidden" name="barcode" value="{barcode}">
             <button class="btn btn-danger">Remove</button>
@@ -2185,13 +2256,7 @@ pip install qrcode[pil]</pre>
 @app.route("/export/grocery.txt")
 def export_grocery_txt():
     L = labels.get_labels()
-    items = get_grocery_list()
-    lines = [L['grocery_list'], "==================", ""]
-    if not items:
-        lines.append("(Empty)")
-    else:
-        for row in items:
-            lines.append(f"- {row[1]}")
+    lines = [L['grocery_list'], "==================", ""] + _grocery_text_lines()
     content = "\n".join(lines) + "\n"
 
     return f"""
@@ -2215,13 +2280,9 @@ def export_grocery_txt():
 
 @app.route("/export/grocery.raw")
 def export_grocery_raw():
-    items = get_grocery_list()
-    lines = [labels.get_labels()['grocery_list'], "==================", ""]
-    if not items:
-        lines.append("(Empty)")
-    else:
-        for row in items:
-            lines.append(f"- {row[1]}")
+    # include_aisle=False — other tools may already parse this exact
+    # "- Name" line format; only the sort order changes.
+    lines = [labels.get_labels()['grocery_list'], "==================", ""] + _grocery_text_lines(include_aisle=False)
     content = "\n".join(lines) + "\n"
     return Response(content, mimetype="text/plain")
 
@@ -2389,10 +2450,14 @@ def export_events_raw():
 
 @app.route("/print/grocery")
 def print_grocery():
-    items = get_grocery_list()
+    aisle_map = get_aisle_map()
+    items = _sort_by_aisle(get_grocery_list(), aisle_map)
     rows = ""
     for row in items:
-        rows += f"<li style='margin:10px 0;font-size:20px;'>{row[1]}</li>"
+        barcode, name = row[0], row[1]
+        aisle = aisle_map.get(barcode)
+        aisle_html = f" <span class='chip'>{aisle}</span>" if aisle else ""
+        rows += f"<li style='margin:10px 0;font-size:20px;'>{name}{aisle_html}</li>"
     if not rows:
         rows = "<li style='margin:10px 0;font-size:20px;'>(Empty)</li>"
 

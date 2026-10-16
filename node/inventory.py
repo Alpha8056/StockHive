@@ -437,6 +437,66 @@ def get_photos_map() -> dict:
         conn.close()
 
 
+def get_item_aisle(barcode: str):
+    """Returns an item's stored aisle text, or None. Kept separate from
+    get_item_by_barcode()'s tuple for the same reason as get_item_photo
+    — that tuple is unpacked positionally at many call sites."""
+    barcode = (barcode or "").strip()
+    if not barcode:
+        return None
+
+    canonical = resolve_barcode(barcode)
+    if canonical:
+        barcode = canonical
+
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT aisle FROM items WHERE barcode = ?;", (barcode,))
+        row = cur.fetchone()
+        return row["aisle"] if row else None
+    finally:
+        conn.close()
+
+
+def set_item_aisle(barcode: str, aisle) -> None:
+    """Sets (or clears, if aisle is None/blank) the stored aisle text for
+    an item."""
+    barcode = (barcode or "").strip()
+    if not barcode:
+        raise ValueError("Barcode required")
+
+    canonical = resolve_barcode(barcode)
+    if canonical:
+        barcode = canonical
+
+    aisle = (aisle or "").strip() or None
+
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE items SET aisle = ? WHERE barcode = ?;", (aisle, barcode))
+        if cur.rowcount == 0:
+            raise ValueError("Item not found")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_aisle_map() -> dict:
+    """barcode -> aisle text, for every item that has one. One bulk
+    query for the Grocery List's sort/label instead of a lookup per
+    row, and instead of adding aisle to get_grocery_list()'s tuple
+    shape."""
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT barcode, aisle FROM items WHERE aisle IS NOT NULL AND aisle != '';")
+        return {r["barcode"]: r["aisle"] for r in cur.fetchall()}
+    finally:
+        conn.close()
+
+
 def get_inventory():
     """
     Returns list of tuples:
