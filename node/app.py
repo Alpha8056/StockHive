@@ -424,6 +424,7 @@ def _styles():
 
       .invLabel{ display:none; }
       .invQtyLabel{ display:none; }
+      .invNoExpire{ display:inline; }
       .invEmpty{ padding:16px; color:var(--muted); }
 
       @media (max-width:760px){
@@ -443,12 +444,13 @@ def _styles():
         .invMeta{ display:flex; flex-wrap:wrap; gap:6px 14px; color:var(--muted); font-size:14px; }
         .invCell-actions{ border-top:1px solid var(--border); padding-top:10px; }
 
-        .invQtyBlock{ display:flex; flex-direction:column; justify-content:center; align-items:flex-end; gap:10px; flex-shrink:0; }
-        .invQtyItem{ text-align:right; }
+        .invQtyBlock{ display:flex; flex-direction:row; align-items:center; gap:16px; flex-shrink:0; padding-right:14px; }
+        .invQtyItem{ display:flex; flex-direction:column; align-items:center; text-align:center; }
         .invQtyLabel{ display:block; color:var(--muted); font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
         .invQtyNum{ display:block; font-size:30px; font-weight:900; line-height:1.15; }
 
         .invLabel{ display:inline; }
+        .invNoExpire{ display:none; }
       }
       .exp-badge{ text-decoration:none; }
       form.inline{ display:inline; }
@@ -1029,11 +1031,19 @@ def inventory_page():
 
         low_display = str(low) if low else "-"
         # The badge text ("Expires in 3d", "Expired 8d ago") already
-        # reads fine on its own in the card view; only the bare
-        # date/dash fallback needs a label to make sense out of context
-        # once the Expires column header is gone on narrow screens.
+        # reads fine on its own in the card view; only the bare-date
+        # fallback needs a label to make sense out of context once the
+        # Expires column header is gone on narrow screens. No date at
+        # all: the wide table still shows "-" (matching the Low column,
+        # header already says "Expires" so no label needed), but the
+        # narrow card hides it entirely via .invNoExpire's media query.
         exp_badge = _expiration_badge_html(expiration_date)
-        exp_cell = exp_badge if exp_badge else f'<span class="invLabel">Expires </span>{expiration_date or "-"}'
+        if exp_badge:
+            exp_cell = exp_badge
+        elif expiration_date:
+            exp_cell = f'<span class="invLabel">Expires </span>{expiration_date}'
+        else:
+            exp_cell = '<span class="invNoExpire">-</span>'
 
         photo = photos_map.get(barcode)
         if photo:
