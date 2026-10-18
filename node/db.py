@@ -243,6 +243,12 @@ def _migrate(conn):
     # that later migration.
     _ensure_column(conn, "items", "aisle", "aisle TEXT")
 
+    # Undo marker on event_log (the live event table, owned by
+    # inventory._ensure_schema — which creates it with this column on
+    # fresh installs, so only pre-existing tables need adding to).
+    if _table_exists(conn, "event_log"):
+        _ensure_column(conn, "event_log", "undone_by", "undone_by INTEGER")
+
     # Ensure events table exists
     _ensure_events_table(conn)
 

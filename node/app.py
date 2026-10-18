@@ -13,7 +13,8 @@ import io
 import socket
 import zipfile
 from datetime import date, datetime
-from urllib.parse import quote
+from html import escape
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from flask import Flask, request, redirect, send_file, Response, url_for, render_template, jsonify
 
@@ -65,6 +66,10 @@ from inventory import (
     add_item,
     increment_existing,
     remove_one,
+    undo_event,
+    get_undo_offer,
+    get_recent_changes,
+    log_item_edit,
     delete_item,
     delete_grocery_only,
     move_location,
@@ -124,7 +129,19 @@ def _apps_button_html() -> str:
         'border:1px solid rgba(255,255,255,.25);'
         '">Apps</a>'
         '<div style="height:44px"></div>'
+        + _kiosk_script_html(launcher_url)
     )
+
+
+def _kiosk_script_html(launcher_url: str) -> str:
+    """Loads the launcher's kiosk.js (night mode + idle return, kiosk
+    browsers only) straight from the launcher. A cross-origin <script src>
+    needs no CORS, and if the launcher is down it just fails to load and
+    nothing dims. Skipped until the launcher has actually been found."""
+    if not launcher_url.startswith(("http://", "https://")):
+        return ""
+    src = escape(launcher_url.rstrip("/") + "/kiosk.js", quote=True)
+    return f'<script src="{src}" defer></script>'
 
 
 @app.after_request
@@ -467,6 +484,37 @@ def _styles():
         .invNoExpire{ display:none; }
       }
       .exp-badge{ text-decoration:none; }
+
+      /* Undo toast: pinned to the bottom so it never shifts the page.
+         Just under the max z-index, so the kiosk night overlay (max)
+         still covers it. */
+      .undoToast{ position:fixed; left:50%; bottom:18px; transform:translateX(-50%); z-index:2147483646;
+              width:min(92vw,440px); display:flex; align-items:center; gap:12px; padding:10px 10px 13px 16px;
+              border-radius:16px; border:1px solid var(--border); background:var(--panel);
+              box-shadow:0 10px 30px rgba(0,0,0,.45); overflow:hidden; }
+      .undoToast form{ margin:0; }
+      .undoText{ flex:1; min-width:0; font-weight:800; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .undoBtn{ min-height:48px; min-width:112px; font-family:inherit; font-weight:900; }
+      .undoBar{ position:absolute; left:0; bottom:0; height:3px; width:100%; background:var(--ok);
+              transform-origin:left; animation:undoDrain 10s linear forwards; }
+      @keyframes undoDrain{ to{ transform:scaleX(0); } }
+
+      /* Recent Changes (Inventory page), collapsed by default */
+      .recentCard summary{ cursor:pointer; list-style:none; display:flex; align-items:center; justify-content:space-between;
+              min-height:44px; font-size:18px; font-weight:800; }
+      .recentCard summary::-webkit-details-marker{ display:none; }
+      .recentCard summary::after{ content:"Show"; color:var(--muted); font-size:14px; font-weight:700; }
+      .recentCard[open] summary::after{ content:"Hide"; }
+      .rcRow{ display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 0; border-top:1px solid var(--border); }
+      .rcRow:first-child{ margin-top:6px; }
+      .rcMain{ min-width:0; }
+      .rcName{ font-weight:800; overflow-wrap:anywhere; }
+      .rcMeta{ color:var(--muted); font-size:13px; margin-top:2px; overflow-wrap:anywhere; }
+      .rcChange{ font-weight:900; font-size:18px; white-space:nowrap; flex-shrink:0; }
+      .rcPlus{ color:var(--ok); } .rcMinus{ color:var(--danger); } .rcEdit{ color:var(--muted); font-size:14px; }
+      .rcTag{ display:inline-block; margin-left:8px; padding:2px 8px; border-radius:999px; border:1px solid var(--border);
+              font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.04em; vertical-align:middle; }
+      .rcTagMuted{ color:var(--muted); }
       form.inline{ display:inline; }
       .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
       @media (max-width:520px){ h1{font-size:24px;} .btn-wide{width:100%;} .zone-btn{min-width:46%;} }
@@ -673,10 +721,12 @@ def _shelf_selector(current_zone, current_shelf, loc_map):
       </div>
     """
 
-def _home_url(zone, shelf, focus='scan', msg="", msgtype="ok"):
+def _home_url(zone, shelf, focus='scan', msg="", msgtype="ok", undo=None):
     url = f"/?zone={zone.replace(' ', '%20')}&shelf={shelf}&focus={focus}&msgtype={msgtype}"
     if msg:
         url += f"&msg={msg.replace(' ', '%20')}"
+    if undo:
+        url += f"&undo={int(undo)}"
     return url
 
 def _home_href(zone, shelf, focus='scan', msg="", msgtype="ok"):
@@ -720,6 +770,7 @@ def home():
       </header>
 
       {status_html}
+      {_undo_toast_html()}
       {_expiring_nav_html()}
 
       <div class="card">
@@ -772,9 +823,9 @@ def scan():
 
     item = get_item_by_barcode(barcode)
     if item:
-        increment_existing(barcode)
+        event_id = increment_existing(barcode)
         new_qty = int(item[3]) + 1
-        return redirect(_home_url(zone, shelf, focus='scan', msg=f"{item[1]} +1({new_qty})", msgtype="ok"))
+        return redirect(_home_url(zone, shelf, focus='scan', msg=f"{item[1]} +1({new_qty})", msgtype="ok", undo=event_id))
 
     # Unknown barcode → go to resolver UI (alias or new item)
     return redirect(url_for("resolve_barcode_page", barcode=barcode, zone=zone, shelf=shelf))
@@ -895,9 +946,9 @@ def remove_one_route():
     if not item:
         return redirect(_home_url(zone, shelf, focus="remove", msg="Item not found", msgtype="danger"))
 
-    remove_one(barcode)
+    event_id = remove_one(barcode)
     new_qty = max(int(item[3]) - 1, 0)
-    return redirect(_home_url(zone, shelf, focus="remove", msg=f"{item[1]} -1({new_qty})", msgtype="danger"))
+    return redirect(_home_url(zone, shelf, focus="remove", msg=f"{item[1]} -1({new_qty})", msgtype="danger", undo=event_id))
 
 
 @app.route("/move")
@@ -1130,6 +1181,9 @@ def inventory_page():
         </form>
         <div class="muted row">Showing {len(filtered)} of {len(items)} items</div>
       </div>
+
+      {_recent_changes_html()}
+      {_undo_toast_html()}
       <script>
         window.onload = function() {{
           var el = document.getElementById('invSearch');
@@ -1143,6 +1197,49 @@ def inventory_page():
       </div>
 
     </div></div>
+    """
+
+
+def _recent_changes_html() -> str:
+    """Collapsed-by-default "Recent Changes" card for the Inventory page:
+    the last 10 scans / -1 taps / undos / edits. One flex row per change,
+    so it reads the same in the wide table and narrow card layouts."""
+    rows = ""
+    for ch in get_recent_changes(10):
+        delta = int(ch["delta"] or 0)
+        if ch["event_type"] == "edit":
+            change = '<span class="rcChange rcEdit">Edited</span>'
+        elif delta > 0:
+            change = f'<span class="rcChange rcPlus">+{delta}</span>'
+        elif delta < 0:
+            change = f'<span class="rcChange rcMinus">&minus;{abs(delta)}</span>'
+        else:
+            change = '<span class="rcChange rcEdit">0</span>'
+
+        tags = ""
+        if ch["event_type"] == "undo":
+            tags += '<span class="rcTag">Undo</span>'
+        elif ch["event_type"] == "add_new":
+            tags += '<span class="rcTag">New</span>'
+        if ch["undone_by"] is not None:
+            tags += '<span class="rcTag rcTagMuted">Undone</span>'
+
+        name = escape(ch["name"]) if ch["name"] else '<span class="muted">(deleted item)</span>'
+        rows += f"""
+        <div class="rcRow">
+          <div class="rcMain">
+            <div class="rcName">{name}{tags}</div>
+            <div class="rcMeta"><span class="mono">{escape(ch['barcode'] or '')}</span> &bull; {escape(ch['created_at'] or '')}</div>
+          </div>
+          {change}
+        </div>
+        """
+    body = rows or "<div class='muted' style='padding-top:10px;'>No changes yet.</div>"
+    return f"""
+      <details class="card recentCard">
+        <summary><span>Recent Changes</span></summary>
+        <div class="rcList">{body}</div>
+      </details>
     """
 
 
@@ -1176,9 +1273,82 @@ def inventory_remove():
     if not item:
         return redirect("/inventory?msgtype=danger&msg=Item%20not%20found")
 
-    remove_one(barcode)
+    event_id = remove_one(barcode)
     new_qty = max(int(item[3]) - 1, 0)
-    return redirect(f"/inventory?msgtype=danger&msg={item[1].replace(' ', '%20')}%20-1({new_qty})")
+    undo_param = f"&undo={int(event_id)}" if event_id else ""
+    return redirect(f"/inventory?msgtype=danger&msg={item[1].replace(' ', '%20')}%20-1({new_qty}){undo_param}")
+
+
+# ============================================================
+# SECTION: Routes — Undo (toast after a scan +1 / -1 tap)
+# ============================================================
+
+UNDO_TOAST_MS = 10000
+
+
+def _safe_return_path(path: str) -> str:
+    """Only same-site relative paths — never an open redirect."""
+    path = (path or "").strip()
+    if not path.startswith("/") or path.startswith("//") or "\\" in path:
+        return "/"
+    return path
+
+
+def _with_status(path: str, msg: str, msgtype: str) -> str:
+    parts = urlsplit(path)
+    query = [(k, v) for k, v in parse_qsl(parts.query) if k not in ("msg", "msgtype", "undo")]
+    query += [("msgtype", msgtype), ("msg", msg)]
+    return urlunsplit(("", "", parts.path, urlencode(query), ""))
+
+
+def _undo_toast_html() -> str:
+    """Bottom-pinned Undo pill for ~10s after a quantity change. Fixed
+    position, so it overlays the page instead of shifting its layout.
+    Renders nothing for a stale/invalid ?undo= (server re-checks it)."""
+    offer = get_undo_offer(request.args.get("undo"))
+    if not offer:
+        return ""
+    args = [(k, v) for k, v in request.args.items(multi=True) if k not in ("undo", "msg", "msgtype")]
+    back = request.path + ("?" + urlencode(args) if args else "")
+    sign = "+" if offer["delta"] > 0 else "-"
+    label = f"{offer['name']} {sign}{abs(offer['delta'])}"
+    return f"""
+    <div class="undoToast" id="undoToast" role="status">
+      <div class="undoText">{escape(label)}</div>
+      <form method="post" action="/undo" onsubmit="this.querySelector('button').disabled = true;">
+        <input type="hidden" name="event_id" value="{int(request.args.get('undo'))}">
+        <input type="hidden" name="next" value="{escape(back, quote=True)}">
+        <button class="btn undoBtn" type="submit">&#8630; Undo</button>
+      </form>
+      <div class="undoBar"></div>
+    </div>
+    <script>
+    (function() {{
+      // Drop ?undo= from the address bar so a refresh doesn't re-offer it.
+      try {{
+        var u = new URL(location.href);
+        u.searchParams.delete("undo");
+        history.replaceState(history.state, "", u.pathname + u.search + u.hash);
+      }} catch (e) {{}}
+      setTimeout(function() {{
+        var t = document.getElementById("undoToast");
+        if (t && t.parentNode) t.parentNode.removeChild(t);
+      }}, {UNDO_TOAST_MS});
+    }})();
+    </script>
+    """
+
+
+@app.route("/undo", methods=["POST"])
+def undo_route():
+    back = _safe_return_path(request.form.get("next"))
+    try:
+        result = undo_event(int(request.form.get("event_id", "")))
+    except ValueError as e:
+        # int() failures also land here; keep the message user-facing.
+        reason = str(e) if str(e) in ("Nothing to undo", "Already undone", "Too late to undo", "Item no longer exists") else "Nothing to undo"
+        return redirect(_with_status(back, reason, "warn"))
+    return redirect(_with_status(back, f"Undone: {result['name']} now {result['qty']}", "ok"))
 
 
 @app.route("/inventory-delete", methods=["POST"])
@@ -1388,6 +1558,7 @@ def edit_item_save():
         update_item_name(barcode, new_name)
         update_item_expiration(barcode, expiration_date)
         set_item_aisle(barcode, aisle)
+        log_item_edit(barcode)
         return redirect(f"/inventory?msgtype=ok&msg=Saved%20{new_name.replace(' ', '%20')}")
     except Exception as e:
         return redirect(f"/inventory?msgtype=danger&msg=Error%3A%20{str(e).replace(' ', '%20')}")

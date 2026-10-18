@@ -44,6 +44,12 @@ def init_db():
                 created_at INTEGER
             );
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS launcher_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
+        """)
         conn.commit()
     finally:
         conn.close()
@@ -178,6 +184,31 @@ def delete_saved_date(date_id: int) -> None:
     conn = _connect()
     try:
         conn.execute("DELETE FROM saved_dates WHERE id = ?;", (date_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ============================================================
+# SECTION: Launcher Settings (key/value — Settings > Display)
+# ============================================================
+
+def get_settings() -> dict:
+    conn = _connect()
+    try:
+        rows = conn.execute("SELECT key, value FROM launcher_settings;").fetchall()
+        return {r["key"]: r["value"] for r in rows}
+    finally:
+        conn.close()
+
+
+def set_settings(values: dict) -> None:
+    conn = _connect()
+    try:
+        conn.executemany("""
+            INSERT INTO launcher_settings (key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+        """, [(k, str(v)) for k, v in values.items()])
         conn.commit()
     finally:
         conn.close()

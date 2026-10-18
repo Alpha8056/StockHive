@@ -195,6 +195,10 @@ body{
   <div class="footer" id="hostline"></div>
 </div>
 
+<!-- Kiosk-only night mode (no-op unless this browser is marked as the
+     kiosk in Settings > Display). Loaded before the script below so
+     renderGrid can use StockHiveKiosk.tileHash(). -->
+<script src="/kiosk.js"></script>
 <script>
 let allNodes = [];
 
@@ -433,7 +437,10 @@ function renderGrid(nodes){
     const statusHtml = n.is_online
       ? '<span class="dot up"></span>Online'
       : '<span class="dot down"></span>Offline since ' + esc(n.offline_since || "unknown");
-    const href = n.is_online && n.url ? n.url : "#";
+    // The kiosk flag lives in per-origin localStorage, so it rides along
+    // to the node's origin as #kiosk=1/#kiosk=0 (kiosk.js there saves it).
+    const kioskHash = window.StockHiveKiosk ? StockHiveKiosk.tileHash() : "";
+    const href = n.is_online && n.url ? n.url + kioskHash : "#";
     const cls = "tile" + (n.is_online ? "" : " offline");
     return `<a class="${cls}" style="--accent:${accent}" href="${href}">
       <div class="tileLabel">${esc(n.label)}</div>

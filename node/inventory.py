@@ -38,10 +38,13 @@ def _ensure_schema(conn: sqlite3.Connection):
             barcode TEXT,
             event_type TEXT NOT NULL,
             delta INTEGER NOT NULL DEFAULT 0,
-            source TEXT NOT NULL DEFAULT 'ui'
+            source TEXT NOT NULL DEFAULT 'ui',
+            undone_by INTEGER
         );
         """
     )
+    # (Existing installs get undone_by from db._migrate instead — CREATE
+    # TABLE IF NOT EXISTS above never alters a table that's already there.)
 
     # barcode aliases: multiple UPCs mapping to a single item row
     cur.execute(
@@ -306,7 +309,8 @@ def remove_barcode_alias(alias_barcode: str) -> None:
 def _log_event(cur, barcode, event_type, delta=0, source="ui"):
     """
     Writes to event_log table. If table doesn't exist for some reason,
-    silently skip (keeps app alive).
+    silently skip (keeps app alive). Returns the new event's id (used by
+    Undo), or None if the write was skipped.
     """
     try:
         cur.execute(
@@ -316,8 +320,9 @@ def _log_event(cur, barcode, event_type, delta=0, source="ui"):
             """,
             (_now_utc_iso(), barcode, event_type, int(delta), source),
         )
+        return cur.lastrowid
     except Exception:
-        pass
+        return None
 
 
 def _sync_grocery(cur, item_id, qty):
@@ -588,6 +593,7 @@ def add_item(barcode: str, name: str, location: str):
 def increment_existing(barcode: str):
     """
     +1 quantity. Supports alias barcodes.
+    Returns the logged event id (for Undo).
     """
     barcode = (barcode or "").strip()
     if not barcode:
@@ -615,9 +621,10 @@ def increment_existing(barcode: str):
             raise ValueError("Item not found")
 
         _sync_grocery(cur, row["id"], row["quantity"])
-        _log_event(cur, barcode, "add", delta=1, source="ui")
+        event_id = _log_event(cur, barcode, "add", delta=1, source="ui")
 
         conn.commit()
+        return event_id
     finally:
         conn.close()
 
@@ -625,6 +632,8 @@ def increment_existing(barcode: str):
 def remove_one(barcode: str):
     """
     -1 quantity, floor at 0. Supports alias barcodes.
+    Returns the logged event id (for Undo), or None when the item was
+    already at 0 — nothing changed, so nothing is logged or undoable.
     """
     barcode = (barcode or "").strip()
     if not barcode:
@@ -637,23 +646,115 @@ def remove_one(barcode: str):
     conn = _connect()
     try:
         cur = conn.cursor()
-        cur.execute(
-            """
-            UPDATE items
-            SET quantity = CASE WHEN quantity > 0 THEN quantity - 1 ELSE 0 END
-            WHERE barcode = ?;
-            """,
-            (barcode,),
-        )
-
         cur.execute("SELECT id, quantity FROM items WHERE barcode = ?;", (barcode,))
         row = cur.fetchone()
         if not row:
             raise ValueError("Item not found")
 
-        _sync_grocery(cur, row["id"], row["quantity"])
-        _log_event(cur, barcode, "remove", delta=-1, source="ui")
+        event_id = None
+        if row["quantity"] > 0:
+            cur.execute("UPDATE items SET quantity = quantity - 1 WHERE id = ?;", (row["id"],))
+            event_id = _log_event(cur, barcode, "remove", delta=-1, source="ui")
 
+        _sync_grocery(cur, row["id"], max(row["quantity"] - 1, 0))
+
+        conn.commit()
+        return event_id
+    finally:
+        conn.close()
+
+
+# ============================================================
+# SECTION: Undo (scan +1 / -1 tap)
+# ============================================================
+
+# The toast only offers Undo for ~10s; the server allows a bit longer
+# so a slow tap right at the end (or a slow Pi) still goes through.
+UNDO_WINDOW_SECONDS = 60
+UNDOABLE_EVENT_TYPES = ("add", "remove")
+
+
+def _undoable_event(cur, event_id):
+    """Returns (event_row, item_row) if event_id can still be undone,
+    else raises ValueError with a user-facing reason."""
+    cur.execute(
+        "SELECT id, created_at, barcode, event_type, delta, undone_by FROM event_log WHERE id = ?;",
+        (event_id,),
+    )
+    ev = cur.fetchone()
+    if not ev or ev["event_type"] not in UNDOABLE_EVENT_TYPES or not ev["delta"]:
+        raise ValueError("Nothing to undo")
+    if ev["undone_by"] is not None:
+        raise ValueError("Already undone")
+    try:
+        created = datetime.strptime(ev["created_at"], "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        raise ValueError("Nothing to undo")
+    if datetime.utcnow() - created > timedelta(seconds=UNDO_WINDOW_SECONDS):
+        raise ValueError("Too late to undo")
+
+    cur.execute("SELECT id, name, quantity FROM items WHERE barcode = ?;", (ev["barcode"],))
+    item = cur.fetchone()
+    if not item:
+        raise ValueError("Item no longer exists")
+    return ev, item
+
+
+def get_undo_offer(event_id):
+    """For rendering the Undo toast: {"name", "delta"} if event_id is
+    still undoable, else None (so a stale ?undo= link shows nothing)."""
+    try:
+        event_id = int(event_id)
+    except (TypeError, ValueError):
+        return None
+    conn = _connect()
+    try:
+        ev, item = _undoable_event(conn.cursor(), event_id)
+        return {"name": item["name"], "delta": ev["delta"]}
+    except (ValueError, sqlite3.OperationalError):
+        return None
+    finally:
+        conn.close()
+
+
+def undo_event(event_id):
+    """
+    Reverses exactly the change event_id made (applies the opposite
+    delta, floor 0), rather than restoring an absolute old quantity —
+    so a scan that happened in between isn't clobbered. Logs an "undo"
+    event and marks the original undone so it can't be undone twice.
+    Returns {"name", "delta", "qty"}; raises ValueError if not undoable.
+    """
+    event_id = int(event_id)
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        # Write lock up front, so two quick taps can't both pass the
+        # "not undone yet" check before either marks it.
+        cur.execute("BEGIN IMMEDIATE;")
+        ev, item = _undoable_event(cur, event_id)
+
+        new_qty = max(item["quantity"] - ev["delta"], 0)
+        applied = new_qty - item["quantity"]
+        cur.execute("UPDATE items SET quantity = ? WHERE id = ?;", (new_qty, item["id"]))
+        _sync_grocery(cur, item["id"], new_qty)
+        undo_id = _log_event(cur, ev["barcode"], "undo", delta=applied, source="ui")
+        cur.execute("UPDATE event_log SET undone_by = ? WHERE id = ?;", (undo_id or -1, ev["id"]))
+
+        conn.commit()
+        return {"name": item["name"], "delta": applied, "qty": new_qty}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def log_item_edit(barcode: str) -> None:
+    """One "edit" entry per Edit-page save, for Recent Changes."""
+    conn = _connect()
+    try:
+        _log_event(conn.cursor(), barcode, "edit", delta=0, source="ui")
         conn.commit()
     finally:
         conn.close()
@@ -985,6 +1086,38 @@ def get_event_log(limit=200):
         conn.close()
 
 
+RECENT_CHANGE_TYPES = ("add_new", "add", "remove", "undo", "edit")
+
+
+def get_recent_changes(limit=10):
+    """Latest inventory changes for the Inventory page: scans (+1, new
+    items), -1 taps, undos and edits. Item name comes from items (None
+    if the item has since been deleted); created_at is converted to
+    local time for display."""
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        placeholders = ",".join("?" for _ in RECENT_CHANGE_TYPES)
+        try:
+            cur.execute(
+                f"""
+                SELECT e.id, e.created_at, e.barcode, e.event_type, e.delta, e.undone_by, i.name
+                FROM event_log e
+                LEFT JOIN items i ON i.barcode = e.barcode
+                WHERE e.event_type IN ({placeholders})
+                ORDER BY e.id DESC
+                LIMIT ?;
+                """,
+                (*RECENT_CHANGE_TYPES, int(limit)),
+            )
+            rows = cur.fetchall()
+        except sqlite3.OperationalError:
+            return []
+        return [dict(r, created_at=to_local_display(r["created_at"])) for r in rows]
+    finally:
+        conn.close()
+
+
 def get_item_stats(barcode: str, days=28):
     barcode = (barcode or "").strip()
     if not barcode:
@@ -1018,7 +1151,11 @@ def get_item_stats(barcode: str, days=28):
                 SELECT event_type, delta
                 FROM event_log
                 WHERE barcode = ?
-                  AND created_at >= ?;
+                  AND created_at >= ?
+                  -- an undone change and its undo cancel out; counting
+                  -- both would show a phantom add *and* remove
+                  AND event_type != 'undo'
+                  AND undone_by IS NULL;
                 """,
                 (barcode, cutoff),
             )

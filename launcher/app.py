@@ -7,7 +7,9 @@
 
 VERSION = "2.0.0"
 
+import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -17,7 +19,7 @@ from datetime import date
 from urllib.parse import quote
 
 import requests
-from flask import Flask, jsonify, redirect, render_template_string, request, send_from_directory
+from flask import Flask, Response, jsonify, redirect, render_template_string, request, send_from_directory
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 import discovery
@@ -332,6 +334,62 @@ def api_saved_dates():
     return jsonify(nodes_db.list_saved_dates())
 
 
+# ============================================================
+# SECTION: Display settings (night mode + idle return, kiosk only)
+# ============================================================
+
+DISPLAY_DEFAULTS = {
+    "night_enabled": False,
+    "night_start": "22:00",
+    "night_end": "06:00",
+    "dim_percent": 70,
+    "idle_return_minutes": 10,
+}
+_TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+def _clamp_int(raw, default: int, lo: int, hi: int) -> int:
+    try:
+        return max(lo, min(hi, int(raw)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _get_display_settings() -> dict:
+    stored = nodes_db.get_settings()
+    d = DISPLAY_DEFAULTS
+    start = stored.get("night_start", d["night_start"])
+    end = stored.get("night_end", d["night_end"])
+    return {
+        "night_enabled": stored.get("night_enabled", "1" if d["night_enabled"] else "0") == "1",
+        "night_start": start if _TIME_RE.match(start or "") else d["night_start"],
+        "night_end": end if _TIME_RE.match(end or "") else d["night_end"],
+        "dim_percent": _clamp_int(stored.get("dim_percent"), d["dim_percent"], 10, 90),
+        "idle_return_minutes": _clamp_int(stored.get("idle_return_minutes"), d["idle_return_minutes"], 0, 240),
+    }
+
+
+with open(os.path.join(BASE_DIR, "kiosk.js"), encoding="utf-8") as _f:
+    _KIOSK_JS_TEMPLATE = _f.read()
+
+
+@app.get("/api/display-settings")
+def api_display_settings():
+    return jsonify(_get_display_settings())
+
+
+@app.get("/kiosk.js")
+def kiosk_js():
+    """Kiosk-only night mode + idle return, loaded by the launcher's pages
+    and injected into every node page. The current settings are baked
+    in, and no-cache makes each page revalidate on load, so a Settings
+    change reaches nodes on their next page load."""
+    js = _KIOSK_JS_TEMPLATE.replace("__DISPLAY_SETTINGS__", json.dumps(_get_display_settings()))
+    resp = Response(js, mimetype="application/javascript")
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
 @app.get("/debug/mdns")
 def debug_mdns():
     return jsonify(discovery.get_debug_state())
@@ -444,7 +502,9 @@ SETTINGS_HTML = """
   .banner.ok{color:#34d399;border-color:rgba(52,211,153,.4);}
   .banner.danger{color:#f87171;border-color:rgba(248,113,113,.4);}
   .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;}
-  input[type=date]{background:#0f1420;border:1px solid var(--border);border-radius:8px;padding:7px 10px;color:var(--text);font-size:15px;color-scheme:dark;}
+  input[type=date],input[type=time],input[type=number]{background:#0f1420;border:1px solid var(--border);border-radius:8px;padding:7px 10px;color:var(--text);font-size:15px;color-scheme:dark;}
+  input[type=number]{width:80px;}
+  input[type=range]{accent-color:#60a5fa;vertical-align:middle;}
   .dateRow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--border);}
   .dateRow:last-child{border-bottom:none;}
   .dateRow form{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0;}
@@ -473,6 +533,35 @@ SETTINGS_HTML = """
         <span>ZIP Code</span>
         <input type="text" name="zip" value="{{ weather_zip }}" maxlength="5" placeholder="67601">
       </div>
+      <div style="margin-top:12px;"><button class="btn" type="submit">Save</button></div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-bottom:10px;">Display</h2>
+    <div class="row">
+      <span>This device is a kiosk</span>
+      <label class="check"><input type="checkbox" id="kioskToggle"> <span id="kioskState">Off</span></label>
+    </div>
+    <div style="color:var(--muted);font-size:13px;padding-bottom:6px;">Saved in this browser only. Turn it on once on the kiosk itself; night mode and idle return never run anywhere else. Node pages pick it up the next time they're opened from a launcher tile.</div>
+    <form method="post" action="/settings/display">
+      <div class="row">
+        <span>Night mode</span>
+        <label class="check"><input type="checkbox" name="night_enabled" value="1" {{ 'checked' if display.night_enabled }}> Enabled</label>
+      </div>
+      <div class="row">
+        <span>Night hours</span>
+        <span><input type="time" name="night_start" value="{{ display.night_start }}" required> to <input type="time" name="night_end" value="{{ display.night_end }}" required></span>
+      </div>
+      <div class="row">
+        <span>Dim level</span>
+        <span><input type="range" name="dim_percent" min="10" max="90" step="5" value="{{ display.dim_percent }}" oninput="document.getElementById('dimValue').textContent = this.value + '%'"> <b id="dimValue">{{ display.dim_percent }}%</b></span>
+      </div>
+      <div class="row">
+        <span>Return to launcher after</span>
+        <span><input type="number" name="idle_return_minutes" min="0" max="240" value="{{ display.idle_return_minutes }}" required> min idle <span style="color:var(--muted);font-size:13px;">(0 = off)</span></span>
+      </div>
+      <div style="color:var(--muted);font-size:13px;">At night the screen dims; a tap wakes it for about a minute. Idle return never leaves a page with unsaved changes.</div>
       <div style="margin-top:12px;"><button class="btn" type="submit">Save</button></div>
     </form>
   </div>
@@ -553,8 +642,24 @@ SETTINGS_HTML = """
 
   <a class="btn" href="/">Back to Launcher</a>
 </div>
+<script src="/kiosk.js"></script>
 <script>
 (function() {
+  var kioskToggle = document.getElementById('kioskToggle');
+  var kioskState = document.getElementById('kioskState');
+  if (kioskToggle && window.StockHiveKiosk) {
+    kioskToggle.checked = StockHiveKiosk.isKiosk();
+    kioskState.textContent = kioskToggle.checked ? 'On' : 'Off';
+    kioskToggle.addEventListener('change', function() {
+      StockHiveKiosk.setKiosk(kioskToggle.checked);
+      // Reload so kiosk.js starts (or stops) night mode on this page too.
+      location.reload();
+    });
+  } else if (kioskState) {
+    kioskState.textContent = 'Unavailable';
+    if (kioskToggle) kioskToggle.disabled = true;
+  }
+
   var el = document.getElementById('updateStatus');
   if (el) {
     fetch('/api/version').then(function(r) { return r.json(); }).then(function(v) {
@@ -622,6 +727,7 @@ def settings_page():
         SETTINGS_HTML,
         build=_get_git_build(),
         weather_zip=weather_client.get_weather_zip(),
+        display=_get_display_settings(),
         saved_dates=saved_dates,
         nodes=[_format_node(r) for r in nodes_db.list_nodes(include_deleted=False)],
         restart_error=restart_error,
@@ -632,6 +738,23 @@ def settings_page():
 def settings_weather_update():
     weather_client.set_weather_zip(request.form.get("zip", ""))
     return redirect("/settings")
+
+
+@app.post("/settings/display")
+def settings_display_update():
+    start = (request.form.get("night_start") or "").strip()
+    end = (request.form.get("night_end") or "").strip()
+    if not _TIME_RE.match(start) or not _TIME_RE.match(end):
+        return redirect("/settings?msgtype=danger&msg=Night%20hours%20must%20be%20HH%3AMM%20times")
+    d = DISPLAY_DEFAULTS
+    nodes_db.set_settings({
+        "night_enabled": "1" if request.form.get("night_enabled") == "1" else "0",
+        "night_start": start,
+        "night_end": end,
+        "dim_percent": _clamp_int(request.form.get("dim_percent"), d["dim_percent"], 10, 90),
+        "idle_return_minutes": _clamp_int(request.form.get("idle_return_minutes"), d["idle_return_minutes"], 0, 240),
+    })
+    return redirect("/settings?msgtype=ok&msg=Display%20settings%20saved")
 
 
 SAVED_DATE_NAME_MAX = 80
