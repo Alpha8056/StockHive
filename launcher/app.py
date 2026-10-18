@@ -13,6 +13,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date
 from urllib.parse import quote
 
 import requests
@@ -196,7 +197,9 @@ def api_weather():
 
     return jsonify({
         "weather": summary,
-        "weather_sections": ["current", "hourly", "alerts", "forecast", "radar"],
+        # No "current" card here — carousel page 3 already shows current
+        # conditions from the "weather" summary above.
+        "weather_sections": ["hourly", "alerts", "forecast", "radar"],
         "hourly": _safe_hourly_rows(12),
         "alerts": _safe_alerts(5),
         "forecast": _safe_tomorrow_periods(),
@@ -321,6 +324,14 @@ def api_version():
     return jsonify(common_update.check_remote_update(REPO_DIR, GIT_BIN))
 
 
+@app.get("/api/saved-dates")
+def api_saved_dates():
+    """Raw Settings > Saved Dates entries for carousel page 3. Which ones
+    fall in the next 7 days is worked out client-side alongside the
+    built-in holidays, so both use the browser's same notion of today."""
+    return jsonify(nodes_db.list_saved_dates())
+
+
 @app.get("/debug/mdns")
 def debug_mdns():
     return jsonify(discovery.get_debug_state())
@@ -433,6 +444,14 @@ SETTINGS_HTML = """
   .banner.ok{color:#34d399;border-color:rgba(52,211,153,.4);}
   .banner.danger{color:#f87171;border-color:rgba(248,113,113,.4);}
   .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;}
+  input[type=date]{background:#0f1420;border:1px solid var(--border);border-radius:8px;padding:7px 10px;color:var(--text);font-size:15px;color-scheme:dark;}
+  .dateRow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--border);}
+  .dateRow:last-child{border-bottom:none;}
+  .dateRow form{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0;}
+  .dateRow input[type=text]{flex:1;min-width:160px;}
+  .dateRow .editForm{flex:1;}
+  .check{display:inline-flex;align-items:center;gap:6px;color:var(--muted);font-size:14px;white-space:nowrap;}
+  .passed{color:var(--muted);font-size:12px;font-weight:700;}
 </style>
 </head>
 <body>
@@ -456,6 +475,35 @@ SETTINGS_HTML = """
       </div>
       <div style="margin-top:12px;"><button class="btn" type="submit">Save</button></div>
     </form>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-bottom:10px;">Saved Dates</h2>
+    <div style="color:var(--muted);font-size:13px;">Shown on the launcher's "Today at a Glance" page from 7 days before, alongside holidays.</div>
+    <div class="dateRow">
+      <form method="post" action="/settings/dates" class="editForm">
+        <input type="text" name="name" maxlength="80" placeholder="e.g. Mom's Birthday" required>
+        <input type="date" name="date" required>
+        <label class="check"><input type="checkbox" name="repeats_yearly" value="1" checked> Repeats yearly</label>
+        <button class="btn" type="submit">Add</button>
+      </form>
+    </div>
+    {% for d in saved_dates %}
+    <div class="dateRow">
+      <form method="post" action="/settings/dates/{{ d.id }}" class="editForm">
+        <input type="text" name="name" maxlength="80" value="{{ d.name }}" required>
+        <input type="date" name="date" value="{{ d.date }}" required>
+        <label class="check"><input type="checkbox" name="repeats_yearly" value="1" {{ 'checked' if d.repeats_yearly }}> Repeats yearly</label>
+        {% if d.is_past %}<span class="passed">(passed)</span>{% endif %}
+        <button class="btn" type="submit">Save</button>
+      </form>
+      <form method="post" action="/settings/dates/{{ d.id }}/delete" onsubmit="return confirm('Delete this saved date?');">
+        <button class="btn btnDanger" type="submit">Delete</button>
+      </form>
+    </div>
+    {% else %}
+    <div class="dateRow" style="color:var(--muted);">No saved dates yet.</div>
+    {% endfor %}
   </div>
 
   <div class="card">
@@ -562,10 +610,19 @@ def settings_page():
         if err:
             restart_failures.append(f"{svc}: {err}")
     restart_error = " | ".join(restart_failures) if restart_failures else None
+
+    # One-time dates that have passed no longer show on the carousel but
+    # stay listed here (tagged) so they can still be edited or deleted.
+    today_iso = date.today().isoformat()
+    saved_dates = [
+        dict(d, is_past=(not d["repeats_yearly"] and d["date"] < today_iso))
+        for d in nodes_db.list_saved_dates()
+    ]
     return render_template_string(
         SETTINGS_HTML,
         build=_get_git_build(),
         weather_zip=weather_client.get_weather_zip(),
+        saved_dates=saved_dates,
         nodes=[_format_node(r) for r in nodes_db.list_nodes(include_deleted=False)],
         restart_error=restart_error,
     )
@@ -575,6 +632,50 @@ def settings_page():
 def settings_weather_update():
     weather_client.set_weather_zip(request.form.get("zip", ""))
     return redirect("/settings")
+
+
+SAVED_DATE_NAME_MAX = 80
+
+
+def _parse_saved_date_form():
+    """Returns (name, date_iso, repeats_yearly, error). An unchecked
+    checkbox isn't submitted at all, so its absence means "one-time"."""
+    name = (request.form.get("name") or "").strip()
+    raw_date = (request.form.get("date") or "").strip()
+    repeats_yearly = request.form.get("repeats_yearly") == "1"
+    if not name:
+        return None, None, None, "Name is required."
+    if len(name) > SAVED_DATE_NAME_MAX:
+        return None, None, None, f"Name must be {SAVED_DATE_NAME_MAX} characters or fewer."
+    try:
+        date_iso = date.fromisoformat(raw_date).isoformat()
+    except ValueError:
+        return None, None, None, "Please enter a valid date."
+    return name, date_iso, repeats_yearly, None
+
+
+@app.post("/settings/dates")
+def settings_add_date():
+    name, date_iso, repeats_yearly, error = _parse_saved_date_form()
+    if error:
+        return redirect(f"/settings?msgtype=danger&msg={quote(error)}")
+    nodes_db.add_saved_date(name, date_iso, repeats_yearly)
+    return redirect(f"/settings?msgtype=ok&msg={quote('Saved ' + name)}")
+
+
+@app.post("/settings/dates/<int:date_id>")
+def settings_update_date(date_id):
+    name, date_iso, repeats_yearly, error = _parse_saved_date_form()
+    if error:
+        return redirect(f"/settings?msgtype=danger&msg={quote(error)}")
+    nodes_db.update_saved_date(date_id, name, date_iso, repeats_yearly)
+    return redirect(f"/settings?msgtype=ok&msg={quote('Updated ' + name)}")
+
+
+@app.post("/settings/dates/<int:date_id>/delete")
+def settings_delete_date(date_id):
+    nodes_db.delete_saved_date(date_id)
+    return redirect("/settings?msgtype=ok&msg=Saved%20date%20deleted")
 
 
 @app.post("/settings/nodes/<node_id>/delete")

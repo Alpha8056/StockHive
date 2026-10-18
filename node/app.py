@@ -427,6 +427,14 @@ def _styles():
       .invCell-low{ grid-column:4; grid-row:1; }
       .invCell-expires{ grid-column:5; grid-row:1; }
       .invCell-actions{ grid-column:6; grid-row:1; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+      /* The -1 <button> is wrapped in a form; as an inline-level box that
+         form gets a text line box with baseline/descender space under the
+         button, making it taller than the button and nudging -1 above the
+         Edit <a> when centered. A flex form hugs the button exactly. And
+         <button> doesn't inherit font-family/line-height the way <a> does,
+         which is what made the two a few px different in height. */
+      .invCell-actions form.inline{ display:flex; margin:0; padding:0; }  /* beats the later form.inline{display:inline} */
+      .invCell-actions .btn{ font-family:inherit; line-height:1.2; }
 
       .invLabel{ display:none; }
       .invQtyLabel{ display:none; }

@@ -2,7 +2,8 @@
 # FILE: nodes_db.py
 # SQLite store of every StockPi node the launcher has discovered
 # over mDNS, plus online/offline state and the permanent-delete
-# blocklist for Settings > Manage Nodes.
+# blocklist for Settings > Manage Nodes. Also holds the
+# Settings > Saved Dates entries shown on carousel page 3.
 # ============================================================
 
 import sqlite3
@@ -32,6 +33,15 @@ def init_db():
                 is_online INTEGER NOT NULL DEFAULT 1,
                 offline_since INTEGER,
                 is_deleted INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS saved_dates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                date TEXT NOT NULL,
+                repeats_yearly INTEGER NOT NULL DEFAULT 1,
+                created_at INTEGER
             );
         """)
         conn.commit()
@@ -118,6 +128,56 @@ def delete_node(node_id: str) -> None:
                 INSERT INTO nodes (id, label, theme, is_online, is_deleted)
                 VALUES (?, '', 'dark', 0, 1);
             """, (node_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ============================================================
+# SECTION: Saved Dates (Settings > Saved Dates)
+# date is stored as ISO YYYY-MM-DD. repeats_yearly entries recur on
+# that month/day every year; one-time entries only on that exact date.
+# ============================================================
+
+def list_saved_dates():
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            "SELECT id, name, date, repeats_yearly FROM saved_dates ORDER BY substr(date, 6), name;"
+        ).fetchall()
+        return [dict(r, repeats_yearly=bool(r["repeats_yearly"])) for r in rows]
+    finally:
+        conn.close()
+
+
+def add_saved_date(name: str, date_iso: str, repeats_yearly: bool) -> None:
+    conn = _connect()
+    try:
+        conn.execute("""
+            INSERT INTO saved_dates (name, date, repeats_yearly, created_at)
+            VALUES (?, ?, ?, ?);
+        """, (name, date_iso, 1 if repeats_yearly else 0, int(time.time())))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def update_saved_date(date_id: int, name: str, date_iso: str, repeats_yearly: bool) -> None:
+    conn = _connect()
+    try:
+        conn.execute("""
+            UPDATE saved_dates SET name = ?, date = ?, repeats_yearly = ?
+            WHERE id = ?;
+        """, (name, date_iso, 1 if repeats_yearly else 0, date_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_saved_date(date_id: int) -> None:
+    conn = _connect()
+    try:
+        conn.execute("DELETE FROM saved_dates WHERE id = ?;", (date_id,))
         conn.commit()
     finally:
         conn.close()
