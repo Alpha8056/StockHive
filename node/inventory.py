@@ -671,7 +671,7 @@ def remove_one(barcode: str):
 # The toast only offers Undo for ~10s; the server allows a bit longer
 # so a slow tap right at the end (or a slow Pi) still goes through.
 UNDO_WINDOW_SECONDS = 60
-UNDOABLE_EVENT_TYPES = ("add", "remove")
+UNDOABLE_EVENT_TYPES = ("add", "remove", "correct")
 
 
 def _undoable_event(cur, event_id):
@@ -750,8 +750,58 @@ def undo_event(event_id):
         conn.close()
 
 
+def set_quantity(barcode: str, new_qty: int):
+    """
+    Sets an exact quantity (Edit page, for fixing a miscount). Logged as
+    a "correct" event with delta = new - old, which usage stats ignore,
+    so a 10 -> 4 fix doesn't read as 6 used. Supports alias barcodes.
+    Returns the event id (for Undo), or None if the qty was unchanged —
+    nothing is written or logged then.
+    """
+    barcode = (barcode or "").strip()
+    if not barcode:
+        raise ValueError("Barcode required")
+    new_qty = int(new_qty)
+    if new_qty < 0:
+        raise ValueError("Quantity can't be negative")
+
+    canonical = resolve_barcode(barcode)
+    if canonical:
+        barcode = canonical
+
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        # Lock before reading old qty, so a scan landing mid-save can't
+        # make the logged delta disagree with what was actually changed.
+        cur.execute("BEGIN IMMEDIATE;")
+        cur.execute("SELECT id, quantity FROM items WHERE barcode = ?;", (barcode,))
+        row = cur.fetchone()
+        if not row:
+            raise ValueError("Item not found")
+
+        delta = new_qty - int(row["quantity"])
+        if delta == 0:
+            conn.rollback()
+            return None
+
+        cur.execute("UPDATE items SET quantity = ? WHERE id = ?;", (new_qty, row["id"]))
+        _sync_grocery(cur, row["id"], new_qty)
+        event_id = _log_event(cur, barcode, "correct", delta=delta, source="ui")
+
+        conn.commit()
+        return event_id
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def log_item_edit(barcode: str) -> None:
-    """One "edit" entry per Edit-page save, for Recent Changes."""
+    """One "edit" entry for an Edit-page save that changed something other
+    than quantity (a qty change logs its own "correct" event), for Recent
+    Changes."""
     conn = _connect()
     try:
         _log_event(conn.cursor(), barcode, "edit", delta=0, source="ui")
@@ -1086,7 +1136,7 @@ def get_event_log(limit=200):
         conn.close()
 
 
-RECENT_CHANGE_TYPES = ("add_new", "add", "remove", "undo", "edit")
+RECENT_CHANGE_TYPES = ("add_new", "add", "remove", "undo", "edit", "correct")
 
 
 def get_recent_changes(limit=10):
@@ -1153,8 +1203,10 @@ def get_item_stats(barcode: str, days=28):
                 WHERE barcode = ?
                   AND created_at >= ?
                   -- an undone change and its undo cancel out; counting
-                  -- both would show a phantom add *and* remove
-                  AND event_type != 'undo'
+                  -- both would show a phantom add *and* remove.
+                  -- Corrections (Edit-page qty fixes) aren't usage
+                  -- either: a 10 -> 4 fix isn't 6 used.
+                  AND event_type NOT IN ('undo', 'correct')
                   AND undone_by IS NULL;
                 """,
                 (barcode, cutoff),

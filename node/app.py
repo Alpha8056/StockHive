@@ -66,6 +66,7 @@ from inventory import (
     add_item,
     increment_existing,
     remove_one,
+    set_quantity,
     undo_event,
     get_undo_offer,
     get_recent_changes,
@@ -1219,6 +1220,8 @@ def _recent_changes_html() -> str:
         tags = ""
         if ch["event_type"] == "undo":
             tags += '<span class="rcTag">Undo</span>'
+        elif ch["event_type"] == "correct":
+            tags += '<span class="rcTag">Correction</span>'
         elif ch["event_type"] == "add_new":
             tags += '<span class="rcTag">New</span>'
         if ch["undone_by"] is not None:
@@ -1411,7 +1414,7 @@ def edit_item_page():
     {_styles()}{_auto_hide_banner_js()}
     <div class="wrap"><div class="container">
       <header>
-        <div><h1>Edit Item</h1><div class="sub">Update name, expiration date &amp; aisle</div></div>
+        <div><h1>Edit Item</h1><div class="sub">Update name, quantity, expiration date &amp; aisle</div></div>
         <a class="btn" href="/inventory">Back</a>
       </header>
       {status_html}
@@ -1424,6 +1427,14 @@ def edit_item_page():
           <div class="fieldRow">
             <input type="text" name="name" value="{name}" placeholder="Item name" required>
           </div>
+          <div class="fieldRow" style="margin-top:14px;margin-bottom:14px;">
+            <label style="color:var(--muted);font-size:14px;" for="editQuantity">Quantity</label>
+          </div>
+          <div class="fieldRow">
+            <input class="mono" style="width:120px;" type="number" id="editQuantity" name="quantity" min="0" max="{QUANTITY_MAX}" step="1" inputmode="numeric" value="{int(qty)}" required>
+            <input type="hidden" name="orig_quantity" value="{int(qty)}">
+          </div>
+          <div class="muted" style="margin-top:6px;">For fixing a miscount. Logged as a correction, so it won't skew usage stats.</div>
           <div class="fieldRow" style="margin-top:14px;margin-bottom:14px;">
             <label style="color:var(--muted);font-size:14px;">Expiration Date (optional)</label>
           </div>
@@ -1531,6 +1542,8 @@ def edit_item_save():
         new_name = (request.form.get("name", "") or "").strip()
         expiration_date = (request.form.get("expiration_date", "") or "").strip()
         aisle = (request.form.get("aisle", "") or "").strip()
+        raw_quantity = request.form.get("quantity")
+        raw_orig_quantity = request.form.get("orig_quantity")
         remove_photo = request.form.get("remove_photo") == "1"
         photo_file = request.files.get("photo")
     except RequestEntityTooLarge:
@@ -1538,6 +1551,38 @@ def edit_item_save():
 
     if not barcode or not new_name:
         return redirect("/inventory?msgtype=danger&msg=Name%20required")
+
+    item = get_item_by_barcode(barcode)
+    if not item:
+        return redirect("/inventory?msgtype=danger&msg=Item%20not%20found")
+    _, cur_name, _location, cur_qty, _low, cur_expiration = item
+
+    # Validated before anything is saved (photo included), so a rejected
+    # quantity never leaves the save half-applied. No quantity field at
+    # all (a page loaded before this existed) just means "unchanged".
+    new_qty = None
+    if raw_quantity is not None:
+        new_qty, qty_error = _parse_quantity(raw_quantity)
+        if qty_error:
+            return redirect(f"/edit?barcode={quote(barcode)}&msgtype=danger&msg={quote(qty_error)}")
+
+    # Only touch quantity if the field was actually changed from what the
+    # page loaded with — otherwise a scan made while this page was open
+    # would be silently overwritten by the stale prefilled number.
+    orig_qty, _ = _parse_quantity(raw_orig_quantity)
+    baseline_qty = orig_qty if orig_qty is not None else int(cur_qty)
+    qty_changed = new_qty is not None and new_qty != baseline_qty
+
+    # Whether anything besides quantity changed decides if this save
+    # gets an "Edited" row in Recent Changes (a qty-only fix logs just
+    # the Correction).
+    photo_changed = bool(photo_file and photo_file.filename) or (remove_photo and bool(get_item_photo(barcode)))
+    other_changed = (
+        new_name != cur_name
+        or expiration_date != (cur_expiration or "")
+        or aisle != (get_item_aisle(barcode) or "")
+        or photo_changed
+    )
 
     if photo_file and photo_file.filename:
         try:
@@ -1558,10 +1603,36 @@ def edit_item_save():
         update_item_name(barcode, new_name)
         update_item_expiration(barcode, expiration_date)
         set_item_aisle(barcode, aisle)
-        log_item_edit(barcode)
+        if other_changed:
+            log_item_edit(barcode)
+        # Logged after the edit event so the Correction sits on top in
+        # Recent Changes (newest first).
+        event_id = set_quantity(barcode, new_qty) if qty_changed else None
+        if event_id:
+            msg = quote(f"Saved {new_name} — quantity set to {new_qty}")
+            return redirect(f"/inventory?msgtype=ok&msg={msg}&undo={int(event_id)}")
         return redirect(f"/inventory?msgtype=ok&msg=Saved%20{new_name.replace(' ', '%20')}")
     except Exception as e:
         return redirect(f"/inventory?msgtype=danger&msg=Error%3A%20{str(e).replace(' ', '%20')}")
+
+
+QUANTITY_MAX = 100000  # typo guard for the Edit page's exact-quantity field
+
+
+def _parse_quantity(raw):
+    """Returns (qty, None) for a whole number 0..QUANTITY_MAX, else
+    (None, user-facing error). raw=None (field absent) -> (None, None)."""
+    if raw is None:
+        return None, None
+    raw = raw.strip()
+    if re.fullmatch(r"-[0-9]+", raw):
+        return None, "Quantity can't be negative"
+    if not re.fullmatch(r"[0-9]+", raw):
+        return None, "Quantity must be a whole number"
+    qty = int(raw)
+    if qty > QUANTITY_MAX:
+        return None, f"Quantity can't be more than {QUANTITY_MAX}"
+    return qty, None
 
 
 # ============================================================
