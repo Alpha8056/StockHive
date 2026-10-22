@@ -664,14 +664,58 @@ def remove_one(barcode: str):
         conn.close()
 
 
+def set_quantity(barcode: str, new_qty: int):
+    """
+    Sets an exact quantity (Edit page count correction). Supports alias
+    barcodes. Logged as a "correct" event carrying the difference, so
+    Recent Changes and Undo see it, but usage stats skip it — fixing a
+    miscount from 10 to 4 isn't 6 actually used.
+    Returns the logged event id (for Undo), or None if nothing changed.
+    """
+    barcode = (barcode or "").strip()
+    if not barcode:
+        raise ValueError("Barcode required")
+    new_qty = int(new_qty)
+    if new_qty < 0:
+        raise ValueError("Quantity can't be negative")
+
+    canonical = resolve_barcode(barcode)
+    if canonical:
+        barcode = canonical
+
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN IMMEDIATE;")
+        cur.execute("SELECT id, quantity FROM items WHERE barcode = ?;", (barcode,))
+        row = cur.fetchone()
+        if not row:
+            raise ValueError("Item not found")
+
+        delta = new_qty - int(row["quantity"])
+        event_id = None
+        if delta:
+            cur.execute("UPDATE items SET quantity = ? WHERE id = ?;", (new_qty, row["id"]))
+            event_id = _log_event(cur, barcode, "correct", delta=delta, source="ui")
+        _sync_grocery(cur, row["id"], new_qty)
+
+        conn.commit()
+        return event_id
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 # ============================================================
-# SECTION: Undo (scan +1 / -1 tap)
+# SECTION: Undo (scan +1 / -1 tap, quantity correction)
 # ============================================================
 
 # The toast only offers Undo for ~10s; the server allows a bit longer
 # so a slow tap right at the end (or a slow Pi) still goes through.
 UNDO_WINDOW_SECONDS = 60
-UNDOABLE_EVENT_TYPES = ("add", "remove")
+UNDOABLE_EVENT_TYPES = ("add", "remove", "correct")
 
 
 def _undoable_event(cur, event_id):
@@ -1086,7 +1130,7 @@ def get_event_log(limit=200):
         conn.close()
 
 
-RECENT_CHANGE_TYPES = ("add_new", "add", "remove", "undo", "edit")
+RECENT_CHANGE_TYPES = ("add_new", "add", "remove", "undo", "edit", "correct")
 
 
 def get_recent_changes(limit=10):
@@ -1155,6 +1199,8 @@ def get_item_stats(barcode: str, days=28):
                   -- an undone change and its undo cancel out; counting
                   -- both would show a phantom add *and* remove
                   AND event_type != 'undo'
+                  -- count corrections aren't real usage or restocks
+                  AND event_type != 'correct'
                   AND undone_by IS NULL;
                 """,
                 (barcode, cutoff),
