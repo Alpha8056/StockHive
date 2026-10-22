@@ -32,6 +32,8 @@ LAUNCHER_TIMEOUT = 10      # seconds
 NODE_TIMEOUT = 60          # per network step (connect, each read) — the node zips before sending
 MAX_DOWNLOAD = 500 * 1024 * 1024
 RESTORE_WARN_BYTES = 45 * 1024 * 1024   # node nginx allows 50 MB uploads
+# Nodes record "last automatic backup" only for requests with this agent.
+USER_AGENT = "StockHive-NASBackup/1"
 CHUNK = 1024 * 1024
 
 _log_file = None
@@ -94,7 +96,8 @@ def fetch_nodes(launcher_url: str) -> list:
 
 def download(url: str, dest: str) -> int:
     """Streams url to dest; returns bytes written. Raises on any problem."""
-    with urllib.request.urlopen(url, timeout=NODE_TIMEOUT) as resp:
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(req, timeout=NODE_TIMEOUT) as resp:
         total = 0
         with open(dest, "wb") as out:
             while True:

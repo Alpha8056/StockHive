@@ -12,7 +12,7 @@ import shutil
 import io
 import socket
 import zipfile
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from html import escape
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
@@ -2161,6 +2161,7 @@ def tools_page():
         <h2>Backup</h2>
         <div class="muted">Downloads your inventory database and item photos as one .zip file.</div>
         <div class="row"><a class="btn btn-wide" href="/backup">Download Backup</a></div>
+        {_last_auto_backup_html()}
       </div>
 
       <div class="card">
@@ -2491,6 +2492,41 @@ def locations_delete():
     return redirect(f"/tools?msgtype=danger&msg=Deleted%20location%20{_u(name)}")
 
 
+# ------------------------------------------------------------
+# SUBSECTION: Last automatic backup (Tools > Backup card)
+# ------------------------------------------------------------
+AUTO_BACKUP_AGENT_PREFIX = "StockHive-NASBackup/"
+AUTO_BACKUP_STALE_HOURS = 36
+_LAST_AUTO_BACKUP_KEY = "last_auto_backup_utc"
+
+
+def _fmt_clock(dt) -> str:
+    return f"{dt.hour % 12 or 12}:{dt:%M} {'AM' if dt.hour < 12 else 'PM'}"
+
+
+def _last_auto_backup_html() -> str:
+    # Text-style symbols, not emoji: the kiosk Chromium has no emoji font.
+    style = "margin-top:8px;font-size:13px;"
+    try:
+        when_utc = datetime.fromisoformat(_db.get_setting(_LAST_AUTO_BACKUP_KEY) or "")
+    except ValueError:
+        when_utc = None
+    if when_utc is None or when_utc.tzinfo is None:
+        return f'<div class="muted" style="{style}">No automatic backups yet</div>'
+    when = when_utc.astimezone()    # node's local time
+    today = datetime.now().astimezone().date()
+    if when.date() == today:
+        day = "Today"
+    elif when.date() == today - timedelta(days=1):
+        day = "Yesterday"
+    else:
+        day = f"{when:%b} {when.day},"
+    text = _h(f"Last automatic backup: {day} {_fmt_clock(when)}")
+    if datetime.now(timezone.utc) - when_utc > timedelta(hours=AUTO_BACKUP_STALE_HOURS):
+        return f'<div style="{style}color:var(--warn);">⚠︎ {text}</div>'
+    return f'<div class="muted" style="{style}">{text} <span style="color:var(--ok);">✓</span></div>'
+
+
 @app.route("/backup")
 def backup_db():
     if not os.path.exists(DB_PATH):
@@ -2509,6 +2545,10 @@ def backup_db():
                     arcname = "photos/" + os.path.relpath(full_path, photos.PHOTOS_DIR).replace(os.sep, "/")
                     zf.write(full_path, arcname)
     buf.seek(0)
+    # Only the nightly backup script counts as "automatic" — this records
+    # that the zip was served, not that the backup machine saved it.
+    if request.headers.get("User-Agent", "").startswith(AUTO_BACKUP_AGENT_PREFIX):
+        _db.set_setting(_LAST_AUTO_BACKUP_KEY, datetime.now(timezone.utc).isoformat(timespec="seconds"))
     return send_file(buf, as_attachment=True, download_name="stockhive_backup.zip", mimetype="application/zip")
 
 
