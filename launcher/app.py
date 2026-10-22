@@ -295,6 +295,42 @@ def api_expiring():
     return jsonify(merged)
 
 
+SEARCH_FETCH_TIMEOUT = 2.0  # seconds, per node
+
+
+def _fetch_node_search(args):
+    """One node's /api/search, via its advertised url like the other
+    fan-outs. Never raises: a slow/offline/old node becomes a status the
+    page can show instead of breaking the whole search."""
+    node, q = args
+    out = {
+        "id": node["id"], "label": node["label"], "theme": node["theme"],
+        "url": node["url"], "items": [], "more": False,
+    }
+    if not node["is_online"] or not node.get("url"):
+        return dict(out, status="offline")
+    try:
+        r = requests.get(f"{node['url']}/api/search", params={"q": q}, timeout=SEARCH_FETCH_TIMEOUT)
+        if r.status_code == 404:
+            return dict(out, status="needs_update")   # node predates /api/search
+        r.raise_for_status()
+        data = r.json()
+        return dict(out, status="ok", items=data.get("items", []), more=bool(data.get("more")))
+    except Exception:
+        return dict(out, status="no_response")
+
+
+@app.get("/api/search")
+def api_search():
+    q = (request.args.get("q") or "").strip()[:100]
+    nodes = [_format_node(r) for r in nodes_db.list_nodes(include_deleted=False)]
+    if not q or not nodes:
+        return jsonify([])
+    # Parallel, so the whole search waits ~SEARCH_FETCH_TIMEOUT at most.
+    with ThreadPoolExecutor(max_workers=max(1, len(nodes))) as pool:
+        return jsonify(list(pool.map(_fetch_node_search, [(n, q) for n in nodes])))
+
+
 VERSION_FETCH_TIMEOUT = 2.0  # seconds, per node
 
 

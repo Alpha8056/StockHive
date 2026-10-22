@@ -130,6 +130,23 @@ body{
 
 .empty{ color:var(--muted); padding:40px 0; text-align:center; }
 
+/* Item search across nodes (results under the grid) */
+#itemResults{ margin-top:18px; display:flex; flex-direction:column; gap:14px; }
+#itemResults:empty{ display:none; }
+.resCard{
+  position:relative; overflow:hidden;
+  background:linear-gradient(165deg, var(--panel), var(--panel2));
+  border:1px solid var(--border); border-radius:20px; padding:16px 20px; box-shadow:0 14px 34px var(--shadow);
+}
+.resCard::before{ content:""; position:absolute; inset:0 0 auto 0; height:4px; background:var(--accent, #60a5fa); }
+.resHead{ font-size:17px; font-weight:900; margin-bottom:4px; }
+.resRow{
+  display:flex; flex-direction:column; justify-content:center; min-height:48px;
+  padding:8px 0; border-top:1px solid var(--border); color:var(--text); text-decoration:none;
+}
+.resRow:first-of-type{ border-top:none; }
+.resNote{ color:var(--muted); font-size:13px; text-align:center; }
+
 #weatherSection{ margin-top:34px; display:flex; flex-direction:column; gap:16px; }
 .sectionTitle{ font-size:15px; font-weight:900; color:var(--muted); text-transform:uppercase; letter-spacing:.08em; margin:0 0 4px 2px; }
 .wxCard{
@@ -185,10 +202,12 @@ body{
   </div>
 
   <div class="searchRow">
-    <input id="search" type="text" placeholder="Search instances…" oninput="applyFilter()">
+    <input id="search" type="text" placeholder="Search instances or items…" oninput="onSearchInput()"
+           onkeydown="if(event.key === 'Enter'){ event.preventDefault(); searchItems(); }">
   </div>
 
   <div id="grid" class="grid"></div>
+  <div id="itemResults"></div>
 
   <div id="weatherSection"></div>
 
@@ -471,8 +490,88 @@ function renderGrid(nodes){
 function applyFilter(){
   const q = document.getElementById("search").value.trim().toLowerCase();
   const filtered = q ? allNodes.filter(n => n.label.toLowerCase().includes(q)) : allNodes;
+  // While searching items, an empty tile grid stays empty (not the
+  // "no instances discovered" message).
+  if(q && allNodes.length && !filtered.length){
+    document.getElementById("grid").innerHTML = "";
+    return filtered;
+  }
   renderGrid(filtered);
+  return filtered;
 }
+
+// ===== item search across nodes =====
+// Runs on Enter, or by itself when the text matches no node names.
+const ITEM_SEARCH_DELAY_MS = 400;
+const ITEM_SEARCH_MIN_CHARS = 2;
+let itemSearchTimer = null;
+let itemSearchSeq = 0;
+
+function onSearchInput(){
+  const matchedNodes = applyFilter();
+  const q = document.getElementById("search").value.trim();
+  clearTimeout(itemSearchTimer);
+  if(!q){
+    itemSearchSeq++;                       // drop any reply still in flight
+    document.getElementById("itemResults").innerHTML = "";
+    return;
+  }
+  if(!matchedNodes.length && q.length >= ITEM_SEARCH_MIN_CHARS)
+    itemSearchTimer = setTimeout(searchItems, ITEM_SEARCH_DELAY_MS);
+  else
+    document.getElementById("itemResults").innerHTML = "";
+}
+
+async function searchItems(){
+  clearTimeout(itemSearchTimer);
+  const q = document.getElementById("search").value.trim();
+  const box = document.getElementById("itemResults");
+  if(!q){ box.innerHTML = ""; return; }
+  const seq = ++itemSearchSeq;
+  box.innerHTML = '<div class="resNote">Searching…</div>';
+  let groups;
+  try {
+    groups = await fetchJson("/api/search?q=" + encodeURIComponent(q));
+  } catch(e){
+    if(seq === itemSearchSeq) box.innerHTML = '<div class="resNote">Search failed. Try again.</div>';
+    return;
+  }
+  if(seq !== itemSearchSeq) return;        // a newer search has started
+  box.innerHTML = renderItemResults(groups, q);
+}
+
+function renderItemResults(groups, q){
+  const kioskHash = window.StockHiveKiosk ? StockHiveKiosk.tileHash() : "";
+  const notes = {
+    offline: "is offline",
+    no_response: "didn't respond",
+    needs_update: "needs an update to search",
+  };
+  let cards = "", problems = "";
+  for(const g of groups){
+    if(g.status !== "ok"){
+      problems += `<div class="resNote">${esc(g.label)} ${notes[g.status] || "didn't respond"}</div>`;
+      continue;
+    }
+    if(!g.items.length) continue;
+    const accent = THEME_ACCENTS[g.theme] || THEME_ACCENTS.dark;
+    const rows = g.items.map(it => {
+      const href = g.url + "/edit?barcode=" + encodeURIComponent(it.barcode) + kioskHash;
+      const meta = `Qty ${it.quantity}` + (it.location ? ` · ${it.location}` : "");
+      return `<a class="resRow" href="${esc(href)}">
+        <div class="expName">${esc(it.name)}</div>
+        <div class="expMeta">${esc(meta)}</div>
+      </a>`;
+    }).join("");
+    const more = g.more ? '<div class="resNote" style="margin-top:8px;">Showing first 50, refine your search</div>' : "";
+    cards += `<div class="resCard" style="--accent:${accent}">
+      <div class="resHead">${esc(g.label)}</div>${rows}${more}
+    </div>`;
+  }
+  if(!cards) cards = `<div class="resNote">No items match "${esc(q)}"</div>`;
+  return cards + problems;
+}
+// ===== end item search =====
 
 async function loadNodes(){
   try {

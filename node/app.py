@@ -2147,6 +2147,37 @@ def api_expiring():
     return jsonify(result)
 
 
+SEARCH_MAX_RESULTS = 50
+SEARCH_MAX_QUERY = 100
+
+
+@app.route("/api/search")
+def api_search():
+    """Read-only item search for the launcher's cross-node search. Same
+    matching as the Inventory page: case-insensitive "contains" on name,
+    barcode and any linked alias."""
+    q = (request.args.get("q", "") or "").strip().lower()[:SEARCH_MAX_QUERY]
+    if not q:
+        return jsonify({"items": [], "more": False})
+
+    aliases_by_item = get_all_aliases_by_item()
+    aisle_map = get_aisle_map()
+    matches = []
+    for barcode, name, location, qty, _low, expiration_date in get_inventory():
+        aliases = aliases_by_item.get(barcode, [])
+        if any(q in h.lower() for h in [name, barcode, *aliases]):
+            matches.append({
+                "name": name,
+                "barcode": barcode,
+                "aliases": aliases,
+                "quantity": int(qty),
+                "location": location,
+                "aisle": aisle_map.get(barcode),
+                "expiration_date": expiration_date,
+            })
+    return jsonify({"items": matches[:SEARCH_MAX_RESULTS], "more": len(matches) > SEARCH_MAX_RESULTS})
+
+
 # ============================================================
 # SECTION: Routes — Tools (backup/restore/locations/debug)
 # ============================================================
