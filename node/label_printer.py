@@ -29,7 +29,9 @@ BAR_HEIGHT = 90
 
 NAME_SIZES = (34, 30, 26, 22, 18)
 NAME_MAX_LINES = 2
+DATE_TEXT_SIZE = 22          # "Made: Oct 22" / "Use by: Oct 29" lines
 CODE_TEXT_SIZE = 22
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 
 # (connect, read) seconds — short so a dead bridge/printer gives a red
 # banner quickly instead of tying up the single gunicorn worker.
@@ -120,14 +122,29 @@ def _line_height(font) -> int:
     return bottom - top
 
 
-def render_label(name: str, code: str) -> Image.Image:
-    """1-bit label image, PRINT_WIDTH wide, black ink on white."""
+def _short_date(iso) -> str:
+    """'2026-10-22' -> 'Oct 22'; '' for blank/unparseable (line is skipped)."""
+    try:
+        _year, month, day = (int(p) for p in str(iso or "").split("-"))
+        return f"{_MONTHS[month - 1]} {day}"
+    except (ValueError, IndexError):
+        return ""
+
+
+def render_label(name: str, code: str, made=None, use_by=None) -> Image.Image:
+    """1-bit label image, PRINT_WIDTH wide, black ink on white. `made` and
+    `use_by` are optional YYYY-MM-DD dates printed under the name."""
     # Imported here so a node missing python-barcode still starts;
     # only printing fails (see print_label).
     from barcode import Code128
 
     name = (name or "").strip() or code
     pattern = Code128(code).build()[0]   # '1' = bar module, '0' = space
+    date_lines = [
+        f"{label}: {_short_date(value)}"
+        for label, value in (("Made", made), ("Use by", use_by))
+        if _short_date(value)
+    ]
 
     total_modules = len(pattern) + 2 * QUIET_MODULES
     module_px = min(MAX_MODULE_PX, PRINT_WIDTH // total_modules)
@@ -136,11 +153,13 @@ def render_label(name: str, code: str) -> Image.Image:
 
     scratch = ImageDraw.Draw(Image.new("1", (1, 1)))
     name_font, name_lines = _fit_name(scratch, name, PRINT_WIDTH - 2 * MARGIN)
+    date_font = _font(DATE_TEXT_SIZE)
     code_font = _font(CODE_TEXT_SIZE)
     name_lh = _line_height(name_font) + 6
+    date_lh = _line_height(date_font) + 6
     code_lh = _line_height(code_font)
 
-    height = 10 + name_lh * len(name_lines) + 8 + BAR_HEIGHT + 8 + code_lh + 12
+    height = 10 + name_lh * len(name_lines) + date_lh * len(date_lines) + 8 + BAR_HEIGHT + 8 + code_lh + 12
     img = Image.new("1", (PRINT_WIDTH, height), 1)
     draw = ImageDraw.Draw(img)
 
@@ -149,6 +168,10 @@ def render_label(name: str, code: str) -> Image.Image:
         w = draw.textlength(line, font=name_font)
         draw.text(((PRINT_WIDTH - w) / 2, y - name_font.getbbox("Ag")[1]), line, font=name_font, fill=0)
         y += name_lh
+    for line in date_lines:
+        w = draw.textlength(line, font=date_font)
+        draw.text(((PRINT_WIDTH - w) / 2, y - date_font.getbbox("Ag")[1]), line, font=date_font, fill=0)
+        y += date_lh
     y += 8
 
     x = (PRINT_WIDTH - len(pattern) * module_px) // 2
@@ -198,9 +221,9 @@ def send_to_bridge(img: Image.Image) -> tuple:
     return False, f"Print failed: {detail}"
 
 
-def print_label(name: str, code: str) -> tuple:
+def print_label(name: str, code: str, made=None, use_by=None) -> tuple:
     try:
-        img = render_label(name, code)
+        img = render_label(name, code, made=made, use_by=use_by)
     except ImportError:
         return False, "Label printing needs python-barcode — run Settings > Update on this node"
     except Exception as e:

@@ -64,6 +64,8 @@ from inventory import (
     get_photos_map,
     get_item_aisle,
     set_item_aisle,
+    get_item_made_date,
+    set_item_made_date,
     get_aisle_map,
     add_item,
     increment_existing,
@@ -229,6 +231,10 @@ DEFAULT_SHELF = 1
 # SUBSECTION: Expiration Warning Window
 # ------------------------------------------------------------
 EXPIRATION_WARN_DAYS = int(os.environ.get("STOCKPI_EXPIRATION_WARN_DAYS", "3"))
+
+# Leftovers (custom-barcode create form): "Use within N days"
+LEFTOVER_DEFAULT_DAYS = 7
+LEFTOVER_MAX_DAYS = 365
 
 # ------------------------------------------------------------
 # SUBSECTION: Paths
@@ -983,13 +989,30 @@ def resolve_barcode_page():
             new_location = _build_location(new_zone, new_shelf, loc_map)
             expiration_date = (request.form.get("expiration_date") or "").strip()
 
-            if not name:
+            # Leftovers (generated codes only): made today, use within N days.
+            made_date = None
+            if is_custom_barcode(barcode) and request.form.get("leftovers"):
+                try:
+                    use_days = int(request.form.get("use_days") or LEFTOVER_DEFAULT_DAYS)
+                except ValueError:
+                    use_days = 0
+                if not 1 <= use_days <= LEFTOVER_MAX_DAYS:
+                    error = f"Use within must be 1-{LEFTOVER_MAX_DAYS} days."
+                else:
+                    made_date = date.today()
+                    expiration_date = (made_date + timedelta(days=use_days)).isoformat()
+
+            if error:
+                pass
+            elif not name:
                 error = "Name is required."
             else:
                 try:
                     add_item(barcode, name, new_location)
                     if expiration_date:
                         update_item_expiration(barcode, expiration_date)
+                    if made_date:
+                        set_item_made_date(barcode, made_date.isoformat())
                     if is_custom_barcode(barcode):
                         note_custom_barcode_used(barcode)
                         return redirect(_home_url(zone, shelf, focus='scan', msg=f"Created: {name} +1(1)", msgtype="ok", print_code=barcode))
@@ -1007,6 +1030,8 @@ def resolve_barcode_page():
         barcode=barcode,
         # Generated codes only ever create a new item — hide "Link to existing".
         custom=is_custom_barcode(barcode),
+        leftover_default_days=LEFTOVER_DEFAULT_DAYS,
+        leftover_max_days=LEFTOVER_MAX_DAYS,
         items=items,
         error=error,
         zone=zone,
@@ -1607,7 +1632,8 @@ def print_label_route():
     item = get_item_by_barcode(barcode) if barcode else None
     if not item:
         return redirect(_with_status(back, "Item not found", "danger"))
-    ok, detail = label_printer.print_label(item[1], item[0])
+    # Current values, so a reprint after editing the date shows the new one.
+    ok, detail = label_printer.print_label(item[1], item[0], made=get_item_made_date(item[0]), use_by=item[5])
     return redirect(_with_status(back, detail, "ok" if ok else "danger"))
 
 

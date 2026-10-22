@@ -566,6 +566,49 @@ def set_item_aisle(barcode: str, aisle) -> None:
         conn.close()
 
 
+def get_item_made_date(barcode: str):
+    """Returns an item's made date (YYYY-MM-DD, set for leftovers), or None."""
+    barcode = (barcode or "").strip()
+    if not barcode:
+        return None
+
+    canonical = resolve_barcode(barcode)
+    if canonical:
+        barcode = canonical
+
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT made_date FROM items WHERE barcode = ?;", (barcode,))
+        row = cur.fetchone()
+        return row["made_date"] if row else None
+    finally:
+        conn.close()
+
+
+def set_item_made_date(barcode: str, made_date) -> None:
+    """Sets (or clears, if blank) an item's made date (YYYY-MM-DD)."""
+    barcode = (barcode or "").strip()
+    if not barcode:
+        raise ValueError("Barcode required")
+
+    canonical = resolve_barcode(barcode)
+    if canonical:
+        barcode = canonical
+
+    made_date = (made_date or "").strip() or None
+
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE items SET made_date = ? WHERE barcode = ?;", (made_date, barcode))
+        if cur.rowcount == 0:
+            raise ValueError("Item not found")
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def get_aisle_map() -> dict:
     """barcode -> aisle text, for every item that has one. One bulk
     query for the Grocery List's sort/label instead of a lookup per

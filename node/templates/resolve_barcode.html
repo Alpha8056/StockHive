@@ -94,7 +94,15 @@
             </select>
           </div>
 
-          <div class="row">
+          {% if custom %}
+          <div class="row fieldRow">
+            <label class="fieldRow" style="gap:8px;"><input type="checkbox" name="leftovers" value="1" id="leftoversBox"> Leftovers</label>
+            <span id="leftoverDays" class="muted" style="display:none;">Use within
+              <input type="number" name="use_days" value="{{ leftover_default_days }}" min="1" max="{{ leftover_max_days }}" step="1" inputmode="numeric" style="width:80px;" disabled> days</span>
+          </div>
+          {% endif %}
+
+          <div class="row" id="expirationRow">
             <label class="muted" style="display:block;margin-bottom:6px;">Expiration date (optional)</label>
             <input type="date" name="expiration_date" value="">
           </div>
@@ -116,6 +124,21 @@
             }
             zoneSel.addEventListener('change', sync);
             sync();
+
+            // Leftovers: show "Use within N days" in place of the date field.
+            var box = document.getElementById('leftoversBox');
+            if (box) {
+              var days = document.getElementById('leftoverDays');
+              var exp = document.getElementById('expirationRow');
+              function syncLeftovers(){
+                days.style.display = box.checked ? '' : 'none';
+                days.querySelector('input').disabled = !box.checked;
+                exp.style.display = box.checked ? 'none' : '';
+                exp.querySelector('input').disabled = box.checked;
+              }
+              box.addEventListener('change', syncLeftovers);
+              syncLeftovers();
+            }
           })();
         </script>
 

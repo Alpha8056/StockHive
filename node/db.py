@@ -267,6 +267,10 @@ def _migrate(conn):
     # that later migration.
     _ensure_column(conn, "items", "aisle", "aisle TEXT")
 
+    # Ensure optional made date exists (YYYY-MM-DD) — set for leftovers
+    # so their label can print "Made:"; NULL for everything else.
+    _ensure_column(conn, "items", "made_date", "made_date TEXT")
+
     # Undo marker on event_log (the live event table, owned by
     # inventory._ensure_schema — which creates it with this column on
     # fresh installs, so only pre-existing tables need adding to).
