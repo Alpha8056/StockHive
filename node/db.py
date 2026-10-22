@@ -156,13 +156,37 @@ def _create_indexes(conn):
 # ------------------------------------------------------------
 # SUBSECTION: seed_default_locations
 # ------------------------------------------------------------
+DEFAULT_LOCATIONS_SEEDED_KEY = "default_locations_seeded"
+
+
 def _seed_default_locations(conn):
+    """
+    Seeds DEFAULT_LOCATIONS once per database, not on every startup —
+    re-seeding on each start (init_db runs at every service start and
+    after a restore) brought back any default the user had deleted.
+    A node_settings flag records that seeding has been handled:
+      - flag set                     -> nothing to do
+      - no flag, no locations at all -> brand-new DB: seed, set flag
+      - no flag, locations exist     -> existing install / older backup:
+                                        set flag only, don't re-add
+    """
     cur = conn.cursor()
-    for name, has_shelves in DEFAULT_LOCATIONS:
-        cur.execute(
-            "INSERT OR IGNORE INTO locations(name, has_shelves) VALUES (?, ?);",
-            (name, has_shelves),
-        )
+    cur.execute("SELECT value FROM node_settings WHERE key = ?;", (DEFAULT_LOCATIONS_SEEDED_KEY,))
+    if cur.fetchone():
+        return
+
+    cur.execute("SELECT COUNT(*) FROM locations;")
+    if cur.fetchone()[0] == 0:
+        for name, has_shelves in DEFAULT_LOCATIONS:
+            cur.execute(
+                "INSERT OR IGNORE INTO locations(name, has_shelves) VALUES (?, ?);",
+                (name, has_shelves),
+            )
+
+    cur.execute(
+        "INSERT OR REPLACE INTO node_settings(key, value) VALUES (?, '1');",
+        (DEFAULT_LOCATIONS_SEEDED_KEY,),
+    )
     conn.commit()
 
 # ============================================================
