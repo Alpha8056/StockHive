@@ -27,17 +27,20 @@
     {% endif %}
 
     <div class="card">
-      <h2>Scanned</h2>
+      <h2>{{ 'New custom barcode' if custom else 'Scanned' }}</h2>
       <div class="row muted">
         Barcode <span class="chip mono">{{ barcode }}</span>
       </div>
       <div class="row muted">
         Current location <span class="chip">{{ location }}</span>
       </div>
+      {% if not custom %}
       <div class="muted">If the same product sometimes scans different barcodes, use “Link to existing item.”</div>
+      {% endif %}
     </div>
 
-    <div class="twoCol">
+    <div class="{{ '' if custom else 'twoCol' }}">
+      {% if not custom %}
       <div class="card">
         <h2>Link to existing item (recommended)</h2>
         <div class="muted">This prevents duplicates. Future scans of this barcode will count toward the linked item.</div>
@@ -64,10 +67,11 @@
         <hr>
         <div class="muted">Tip: Pick the item name you already have in Inventory. The barcode you scanned becomes an alias.</div>
       </div>
+      {% endif %}
 
       <div class="card">
         <h2>Create as new item</h2>
-        <div class="muted">Use this only if it’s truly a different product.</div>
+        <div class="muted">{{ 'You can print a label for it right after creating.' if custom else 'Use this only if it’s truly a different product.' }}</div>
 
         <form method="post" action="/resolve_barcode?zone={{ zone|urlencode }}&shelf={{ shelf }}" id="newItemForm">
           <input type="hidden" name="barcode" value="{{ barcode }}">

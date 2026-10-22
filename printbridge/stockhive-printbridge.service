@@ -1,0 +1,19 @@
+[Unit]
+Description=StockHive Print Bridge (CTP500 over Bluetooth)
+After=network-online.target bluetooth.target
+Wants=network-online.target
+
+[Service]
+User=kinv
+WorkingDirectory=/home/kinv/StockHive/printbridge
+EnvironmentFile=/etc/stockhive-printbridge.env
+ExecStart=/home/kinv/StockHive/printbridge/venv/bin/python bridge.py
+Restart=on-failure
+RestartSec=5
+# Stay out of the kiosk's way
+Nice=10
+MemoryMax=100M
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

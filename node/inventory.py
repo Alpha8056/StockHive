@@ -9,8 +9,12 @@
 # SECTION: Imports
 # ============================================================
 import os
+import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
+
+import db
+import labels
 
 # ============================================================
 # SECTION: Paths / DB
@@ -300,6 +304,80 @@ def remove_barcode_alias(alias_barcode: str) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+# ============================================================
+# SECTION: Custom Barcodes (SH-<node code>-<NNNNN>)
+# For items with no store barcode. The counter only advances when a
+# code is actually used to create an item, so opening the create page
+# and backing out doesn't burn a number.
+# ============================================================
+_NODE_CODE_KEY = "custom_barcode_node_code"
+_COUNTER_KEY = "custom_barcode_counter"
+_NODE_CODE_RE = re.compile(r"^[A-Z]{1,3}$")
+
+
+def _default_node_code() -> str:
+    words = re.findall(r"[A-Za-z]+", labels.get_node_label())
+    return "".join(w[0] for w in words)[:3].upper() or "N"
+
+
+def get_node_code() -> str:
+    """Saved on first use so renaming the node later doesn't change it."""
+    code = db.get_setting(_NODE_CODE_KEY)
+    if not code:
+        code = _default_node_code()
+        db.set_setting(_NODE_CODE_KEY, code)
+    return code
+
+
+def set_node_code(code: str) -> None:
+    code = (code or "").strip().upper()
+    if not _NODE_CODE_RE.match(code):
+        raise ValueError("Node code must be 1-3 letters (A-Z)")
+    db.set_setting(_NODE_CODE_KEY, code)
+
+
+def _custom_number(barcode: str):
+    m = re.fullmatch(rf"SH-{re.escape(get_node_code())}-(\d{{5}})", (barcode or "").strip())
+    return int(m.group(1)) if m else None
+
+
+def is_custom_barcode(barcode: str) -> bool:
+    return _custom_number(barcode) is not None
+
+
+def _counter() -> int:
+    try:
+        return max(1, int(db.get_setting(_COUNTER_KEY, "1")))
+    except ValueError:
+        return 1
+
+
+def next_custom_barcode() -> str:
+    """Next unused code, skipping any already taken as a barcode or alias."""
+    code = get_node_code()
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        for n in range(_counter(), 100000):
+            candidate = f"SH-{code}-{n:05d}"
+            cur.execute(
+                "SELECT 1 FROM items WHERE barcode = ? "
+                "UNION ALL SELECT 1 FROM barcode_aliases WHERE barcode = ? LIMIT 1;",
+                (candidate, candidate),
+            )
+            if not cur.fetchone():
+                return candidate
+    finally:
+        conn.close()
+    raise ValueError("No custom barcodes left for this node code")
+
+
+def note_custom_barcode_used(barcode: str) -> None:
+    n = _custom_number(barcode)
+    if n is not None and n + 1 > _counter():
+        db.set_setting(_COUNTER_KEY, str(n + 1))
 
 
 # ============================================================

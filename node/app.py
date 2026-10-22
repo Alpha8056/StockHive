@@ -26,6 +26,7 @@ import labels
 import mdns_advertise
 import identity
 import photos
+import label_printer
 
 class PrefixMiddleware:
     def __init__(self, app):
@@ -95,6 +96,13 @@ from inventory import (
     get_locations,
     add_location,
     delete_location,
+
+    # Custom barcodes
+    get_node_code,
+    set_node_code,
+    is_custom_barcode,
+    next_custom_barcode,
+    note_custom_barcode_used,
 )
 
 # ============================================================
@@ -410,9 +418,9 @@ def _styles():
       .btn-warn{ border-color: rgba(247,201,72,0.35); background: rgba(247,201,72,0.10); }
       .btn-warn:hover{ background: rgba(247,201,72,0.16); border-color: rgba(247,201,72,0.55); }
       .fieldRow{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
-      input[type=text]{ width:min(440px,100%); font-size:18px; padding:12px; border-radius:14px; border:1px solid var(--border);
+      input[type=text], input[type=password]{ width:min(440px,100%); font-size:18px; padding:12px; border-radius:14px; border:1px solid var(--border);
                         background:var(--input); color:var(--text); outline:none; }
-      input[type=text]:focus{ border-color: rgba(90,162,255,0.6); box-shadow:0 0 0 3px rgba(90,162,255,0.18); }
+      input[type=text]:focus, input[type=password]:focus{ border-color: rgba(90,162,255,0.6); box-shadow:0 0 0 3px rgba(90,162,255,0.18); }
       input[type=file]{ color: var(--muted); }
       select, input[type=number]{ font-size:16px; padding:10px 12px; border-radius:12px; border:1px solid var(--border);
               background:var(--input); color:var(--text); outline:none; }
@@ -597,7 +605,8 @@ def _auto_hide_banner_js():
         el.title = "Tap to dismiss";
         el.addEventListener("click", function() {{ hide(el); }});
 
-        setTimeout(function() {{ hide(el); }}, delay);
+        // Banners with an action in them (e.g. Print label) stay until tapped.
+        if (!el.hasAttribute("data-keep")) setTimeout(function() {{ hide(el); }}, delay);
       }});
     }})();
     </script>
@@ -613,6 +622,18 @@ def _page_status_html():
     if not msg:
         return ""
     cls = "ok" if msgtype == "ok" else ("warn" if msgtype == "warn" else "danger")
+    print_code = (request.args.get("print") or "").strip()
+    if cls == "ok" and print_code:
+        # POST (not a link) so a browser prefetch can never trigger a print.
+        back = escape(request.full_path.rstrip("?"), quote=True)
+        return (
+            f"<div id='statusBanner' class='status {cls}' data-keep>{msg} &nbsp;"
+            f"<form class='inline' method='post' action='/print-label'>"
+            f"<input type='hidden' name='barcode' value='{escape(print_code, quote=True)}'>"
+            f"<input type='hidden' name='back' value='{back}'>"
+            f"<button type='submit' style='all:unset;cursor:pointer;text-decoration:underline;'>Print label</button>"
+            f"</form></div>"
+        )
     return f"<div id='statusBanner' class='status {cls}'>{msg}</div>"
 
 
@@ -754,12 +775,14 @@ def _shelf_selector(current_zone, current_shelf, loc_map):
       </div>
     """
 
-def _home_url(zone, shelf, focus='scan', msg="", msgtype="ok", undo=None):
+def _home_url(zone, shelf, focus='scan', msg="", msgtype="ok", undo=None, print_code=None):
     url = f"/?zone={zone.replace(' ', '%20')}&shelf={shelf}&focus={focus}&msgtype={msgtype}"
     if msg:
         url += f"&msg={msg.replace(' ', '%20')}"
     if undo:
         url += f"&undo={int(undo)}"
+    if print_code:
+        url += f"&print={quote(print_code)}"
     return url
 
 def _home_href(zone, shelf, focus='scan', msg="", msgtype="ok"):
@@ -821,7 +844,7 @@ def home():
             <button class="btn btn-wide" type="submit">Scan</button>
           </div>
         </form>
-        <div class="muted row">If item exists: auto +1. If new: link to existing OR enter name once.</div>
+        <div class="muted row"><a class="muted" style="text-decoration:underline;" href="/custom-barcode?zone={zone.replace(' ', '%20')}&shelf={shelf}">No barcode? Create one &rarr;</a></div>
       </div>
 
       <div class="card">
@@ -873,6 +896,18 @@ def new_item():
 
     add_item(barcode, name, location)
     return redirect(_home_url(zone, shelf, focus='scan', msg=f"{name} +1(1)", msgtype="ok"))
+
+
+@app.route("/custom-barcode")
+def custom_barcode():
+    """"No barcode? Create one" — straight into the resolver's create form
+    with a generated SH-<node code>-<NNNNN> code already filled in."""
+    zone, shelf, _loc_map = _selected_zone_shelf()
+    try:
+        code = next_custom_barcode()
+    except ValueError as e:
+        return redirect(_home_url(zone, shelf, focus='scan', msg=str(e), msgtype="danger"))
+    return redirect(url_for("resolve_barcode_page", barcode=code, zone=zone, shelf=shelf))
 
 
 # ============================================================
@@ -939,6 +974,9 @@ def resolve_barcode_page():
                     add_item(barcode, name, new_location)
                     if expiration_date:
                         update_item_expiration(barcode, expiration_date)
+                    if is_custom_barcode(barcode):
+                        note_custom_barcode_used(barcode)
+                        return redirect(_home_url(zone, shelf, focus='scan', msg=f"Created: {name} +1(1)", msgtype="ok", print_code=barcode))
                     return redirect(_home_url(zone, shelf, focus='scan', msg=f"{name} +1(1)", msgtype="ok"))
                 except Exception as e:
                     error = str(e)
@@ -951,6 +989,8 @@ def resolve_barcode_page():
         # Jinja doesn't escape the <style> block.
         styles=Markup(_styles()),
         barcode=barcode,
+        # Generated codes only ever create a new item — hide "Link to existing".
+        custom=is_custom_barcode(barcode),
         items=items,
         error=error,
         zone=zone,
@@ -1335,7 +1375,7 @@ def _safe_return_path(path: str) -> str:
 
 def _with_status(path: str, msg: str, msgtype: str) -> str:
     parts = urlsplit(path)
-    query = [(k, v) for k, v in parse_qsl(parts.query) if k not in ("msg", "msgtype", "undo")]
+    query = [(k, v) for k, v in parse_qsl(parts.query) if k not in ("msg", "msgtype", "undo", "print")]
     query += [("msgtype", msgtype), ("msg", msg)]
     return urlunsplit(("", "", parts.path, urlencode(query), ""))
 
@@ -1529,6 +1569,11 @@ def edit_item_page():
         <h2>More</h2>
         <div class="fieldRow">
           <a class="btn btn-wide btn-warn" href="/stats?barcode={barcode}">View Stats</a>
+          <form class="inline" method="post" action="/print-label">
+            <input type="hidden" name="barcode" value="{barcode}">
+            <input type="hidden" name="back" value="/edit?barcode={quote(barcode)}">
+            <button class="btn btn-wide" type="submit">Print Label</button>
+          </form>
           <form class="inline" method="post" action="/inventory-delete">
             <input type="hidden" name="barcode" value="{barcode}">
             <button class="btn btn-wide btn-danger" type="submit">Delete Item</button>
@@ -1537,6 +1582,17 @@ def edit_item_page():
       </div>
     </div></div>
     """
+
+
+@app.route("/print-label", methods=["POST"])
+def print_label_route():
+    barcode = (request.form.get("barcode", "") or "").strip()
+    back = _safe_return_path(request.form.get("back", ""))
+    item = get_item_by_barcode(barcode) if barcode else None
+    if not item:
+        return redirect(_with_status(back, "Item not found", "danger"))
+    ok, detail = label_printer.print_label(item[1], item[0])
+    return redirect(_with_status(back, detail, "ok" if ok else "danger"))
 
 
 @app.route("/edit/alias-add", methods=["POST"])
@@ -2166,6 +2222,7 @@ def settings_page():
     L = labels.get_labels()
     ident = identity.snapshot()
 
+    node_code = get_node_code()
     current_theme = _valid_theme_key(ident["theme"])
     theme_options = "".join(
         f'<option value="{key}" {"selected" if key == current_theme else ""}>{t["name"]}</option>'
@@ -2237,6 +2294,31 @@ def settings_page():
             <input type="text" name="grocery_low_stock" value="{L['grocery_low_stock']}">
           </div>
           <div class="row"><button class="btn btn-wide" type="submit">Save Labels</button></div>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>Labels &amp; Printer</h2>
+        <div class="muted">Custom barcodes look like <span class="mono">SH-{node_code}-00001</span>. Keep the node code different on every node. Labels print through the print bridge on the kitchen Pi.</div>
+        <form method="post" action="/settings/update">
+          <div class="fieldRow" style="margin-top:10px;">
+            <label class="muted" style="min-width:110px;">Node code</label>
+            <input type="text" name="node_code" value="{node_code}" maxlength="3" pattern="[A-Za-z]{{1,3}}" style="width:100px;text-transform:uppercase;" required>
+          </div>
+          <div class="fieldRow" style="margin-top:10px;">
+            <label class="muted" style="min-width:110px;">Bridge address</label>
+            <input type="text" name="printer_bridge_url" value="{escape(label_printer.get_bridge_url(), quote=True)}" placeholder="http://kitchen-pi.local:8765">
+          </div>
+          <div class="fieldRow" style="margin-top:10px;">
+            <label class="muted" style="min-width:110px;">Token</label>
+            <input type="password" name="printer_token" value="" placeholder="{'(saved — leave blank to keep)' if label_printer.has_token() else 'Token from the bridge'}" autocomplete="off">
+          </div>
+          <div class="btnRow" style="margin-top:12px;">
+            <button class="btn btn-wide" type="submit">Save</button>
+          </div>
+        </form>
+        <form class="inline" method="post" action="/printer/test">
+          <button class="btn btn-wide btn-warn" type="submit" style="margin-top:10px;">Test Print</button>
         </form>
       </div>
 
@@ -2327,6 +2409,18 @@ def settings_update():
         theme = _valid_theme_key(theme.strip())
     launcher_url = request.form.get("launcher_url")
     advertise_ip = request.form.get("advertise_ip")
+    node_code = request.form.get("node_code")
+
+    if node_code is not None:
+        try:
+            set_node_code(node_code)
+        except ValueError as e:
+            return redirect(_with_status("/settings", str(e), "danger"))
+    if request.form.get("printer_bridge_url") is not None:
+        label_printer.set_bridge_url(request.form.get("printer_bridge_url"))
+    # Blank keeps the saved token (the field is never pre-filled).
+    if (request.form.get("printer_token") or "").strip():
+        label_printer.set_token(request.form.get("printer_token"))
 
     if launcher_url is not None:
         labels.set_launcher_url(launcher_url)
@@ -2348,6 +2442,12 @@ def settings_update():
         identity.update_identity(label=node_label, theme=theme, advertise_ip=advertise_ip)
 
     return redirect("/settings?msgtype=ok&msg=Settings%20saved")
+
+
+@app.route("/printer/test", methods=["POST"])
+def printer_test():
+    ok, detail = label_printer.print_label(f"{labels.get_node_label()} test print", f"SH-{get_node_code()}-TEST")
+    return redirect(_with_status("/settings", "Test print sent" if ok else detail, "ok" if ok else "danger"))
 
 
 @app.route("/settings/labels", methods=["POST"])
