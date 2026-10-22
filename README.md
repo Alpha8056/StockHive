@@ -47,6 +47,44 @@ whatever the node is tracking, e.g. "Part List" for a tote-storage
 instance). For the launcher, you'll be asked for a ZIP code for the
 weather widget.
 
+## Admin token (updates, restart, shutdown)
+
+Each node's **Update**, **Restart Service** and **Shutdown Device** buttons,
+and the launcher's **Update All**, are protected by an admin token:
+
+- **Without a token:** a node's own buttons work as before, but only from that node's
+  own pages. Another website can't trigger them through your browser.
+  The launcher can't update the node remotely.
+- **With a token set:** the token is required. You type it into the
+  Device card on the node, or enter it on the launcher's Nodes card. Scripts
+  elsewhere on the network can no longer update, restart or shut a node down.
+
+**Use a long random token, not a memorable password.** Let a password
+manager generate one (24+ characters). It also fills the token
+field for you. Or generate one on any machine:
+```bash
+python3 -c "import secrets; print(secrets.token_urlsafe(24))"
+```
+Use the **same token on every node**. The node stores only a salted hash,
+and the launcher doesn't store it at all.
+
+**Setting it up (one time):**
+1. Update every node and the launcher the usual way (Settings > Update on each).
+2. On each node, go to **Settings > Admin Token**, paste the token and click **Set Token**.
+3. On the launcher, go to **Settings > Nodes**, enter the token, and then use **Update** or
+   **Update All**. Nodes are updated one at a time. A node that shares one machine
+   with the launcher updates with the launcher's own Update button instead.
+
+**Forgot the token?** On that node's machine, clear it (the buttons then
+work without a token again):
+```bash
+cd ~/StockHive/node    # your node folder
+venv/bin/python -c "import db; db.set_setting('admin_token_hash', '')"
+```
+
+**Restoring a backup** from another node also brings that node's token,
+because the token hash is stored in the inventory database.
+
 ## Repo layout
 
 See [node/](node/), [launcher/](launcher/), [nginx/](nginx/) and

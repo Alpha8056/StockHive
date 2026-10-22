@@ -52,6 +52,7 @@ SYSTEMCTL_BIN = "/bin/systemctl"  # must match the path in the sudoers rule exac
 if REPO_DIR not in sys.path:
     sys.path.insert(0, REPO_DIR)
 import common_update
+import common_security
 
 nodes_db.init_db()
 discovery.start(PUBLIC_PORT)
@@ -365,6 +366,69 @@ def api_node_versions():
     return jsonify(results)
 
 
+# ------------------------------------------------------------
+# SUBSECTION: Remote node updates (Settings > Nodes, "Update All")
+# The admin token is never stored here: the Settings page sends it with
+# each call and it's forwarded to the node as a Bearer header. The page
+# drives the one-node-at-a-time sequence, so no request here waits on
+# a whole update (gunicorn would cut it off at 30s).
+# ------------------------------------------------------------
+NODE_UPDATE_START_TIMEOUT = 20   # node runs a git fetch before answering
+NODE_UPDATE_STATUS_TIMEOUT = 3
+
+
+def _node_for_update(node_id: str):
+    row = next((r for r in nodes_db.list_nodes(include_deleted=False) if r["id"] == node_id), None)
+    return _format_node(row) if row else None
+
+
+def _node_error(status, detail, code=200):
+    return jsonify({"status": status, "detail": detail}), code
+
+
+@app.post("/api/nodes/<node_id>/update")
+def api_node_update(node_id):
+    blocked = _cross_site_blocked()
+    if blocked:
+        return blocked
+    token = ((request.get_json(silent=True) or {}).get("token") or "").strip()
+    node = _node_for_update(node_id)
+    if not node:
+        return _node_error("not_found", "Node not found", 404)
+    if not node["is_online"] or not node["url"]:
+        return _node_error("offline", "Offline")
+    if not token:
+        return _node_error("bad_token", "Enter the admin token first")
+    try:
+        r = requests.post(f"{node['url']}/api/system/update",
+                          headers={"Authorization": f"Bearer {token}"},
+                          timeout=NODE_UPDATE_START_TIMEOUT)
+    except Exception:
+        return _node_error("no_response", "Didn't respond")
+    if r.status_code == 404:
+        return _node_error("needs_update", "Needs manual update (too old for remote updates)")
+    try:
+        return jsonify(r.json())
+    except ValueError:
+        return _node_error("error", f"Unexpected reply (HTTP {r.status_code})")
+
+
+@app.get("/api/nodes/<node_id>/update-status")
+def api_node_update_status(node_id):
+    node = _node_for_update(node_id)
+    token = (request.headers.get("X-Admin-Token") or "").strip()
+    if not node or not node["url"]:
+        return jsonify({"reachable": False})
+    try:
+        r = requests.get(f"{node['url']}/api/system/update-status",
+                         headers={"Authorization": f"Bearer {token}"},
+                         timeout=NODE_UPDATE_STATUS_TIMEOUT)
+        data = r.json()
+    except Exception:
+        return jsonify({"reachable": False})   # normal while it restarts
+    return jsonify(dict(data, reachable=r.status_code == 200))
+
+
 @app.get("/api/version")
 def api_version():
     """Launcher's own current build + update-available status — fetched
@@ -476,14 +540,27 @@ def _delayed_poweroff(delay: float = 1.0) -> None:
     threading.Thread(target=_run, daemon=True).start()
 
 
+def _cross_site_blocked():
+    """403 response if a state-changing request came from another site."""
+    if common_security.same_origin_ok(request):
+        return None
+    return Response("Blocked: request came from another site.", status=403, mimetype="text/plain")
+
+
 @app.post("/system/restart")
 def system_restart():
+    blocked = _cross_site_blocked()
+    if blocked:
+        return blocked
     _delayed_restart()
     return redirect("/settings?msgtype=ok&msg=Restarting%20service%E2%80%A6")
 
 
 @app.post("/system/update")
 def system_update():
+    blocked = _cross_site_blocked()
+    if blocked:
+        return blocked
     ok, detail = common_update.pull_latest(REPO_DIR, GIT_BIN)
     if not ok:
         return redirect(f"/settings?msgtype=danger&msg=Update%20failed%3A%20{quote(detail[:300])}")
@@ -508,6 +585,9 @@ def system_update():
 
 @app.post("/system/shutdown")
 def system_shutdown():
+    blocked = _cross_site_blocked()
+    if blocked:
+        return blocked
     _delayed_poweroff()
     return redirect("/settings?msgtype=ok&msg=Shutting%20down%E2%80%A6")
 
@@ -534,7 +614,7 @@ SETTINGS_HTML = """
   .card{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--border);border-radius:16px;padding:20px;margin:16px 0;box-shadow:0 10px 30px var(--shadow);}
   .row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);}
   .row:last-child{border-bottom:none;}
-  input[type=text]{background:#0f1420;border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-size:15px;}
+  input[type=text],input[type=password]{background:#0f1420;border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-size:15px;}
   .btn{padding:10px 18px;background:var(--btn);color:var(--text);border:1px solid var(--border);border-radius:10px;cursor:pointer;text-decoration:none;display:inline-block;font-weight:700;}
   .btn:hover{background:var(--btnHover);}
   .btnDanger{border-color:rgba(248,113,113,.5);}
@@ -643,19 +723,25 @@ SETTINGS_HTML = """
   </div>
 
   <div class="card">
-    <h2 style="margin-bottom:10px;">Manage Nodes</h2>
-    <div class="row" style="border-bottom:none;padding-bottom:0;">
-      <span style="color:var(--muted);font-size:13px;">Deleting a node hides its tile permanently, even if it comes back online.</span>
+    <h2 style="margin-bottom:10px;">Nodes</h2>
+    <div class="row" style="border-bottom:none;padding-bottom:0;flex-wrap:wrap;">
+      <span style="color:var(--muted);font-size:13px;">Updates use the admin token set in each node's Settings. It isn't saved here.</span>
     </div>
+    <div class="row" style="border-bottom:none;flex-wrap:wrap;justify-content:flex-start;">
+      <input type="password" id="adminToken" placeholder="Admin token" autocomplete="current-password" style="flex:1;min-width:200px;">
+    </div>
+    <div style="color:var(--muted);font-size:13px;margin-bottom:8px;">Tip: update a test node first.</div>
+    <div style="margin-bottom:12px;"><button class="btn btnWarn" type="button" id="updateAllBtn">Update All</button></div>
+    <div id="updateLog" style="font-size:14px;margin-bottom:12px;"></div>
     <table>
-      <thead><tr><th>Label</th><th>Status</th><th>IP</th><th>Version</th><th></th><th></th></tr></thead>
+      <thead><tr><th>Name</th><th>Build</th><th>Status</th><th></th><th></th><th></th></tr></thead>
       <tbody>
         {% for n in nodes %}
         <tr>
           <td>{{ n.label }}</td>
-          <td><span class="pill {{ 'up' if n.is_online else 'down' }}">{{ 'Online' if n.is_online else 'Offline since ' + (n.offline_since or '—') }}</span></td>
-          <td>{{ n.ip or '—' }}</td>
-          <td id="version-{{ n.id }}" style="color:var(--muted);">{{ '—' if n.is_online else 'offline' }}</td>
+          <td class="mono" id="build-{{ n.id }}" style="color:var(--muted);">—</td>
+          <td id="status-{{ n.id }}" style="color:var(--muted);">{{ 'Checking…' if n.is_online else 'Offline' }}</td>
+          <td><button class="btn" type="button" data-update-node="{{ n.id }}" {{ '' if n.is_online else 'disabled' }}>Update</button></td>
           <td>{% if n.url %}<a class="btn" href="{{ n.url }}/settings">Settings</a>{% endif %}</td>
           <td>
             <form method="post" action="/settings/nodes/{{ n.id }}/delete" onsubmit="return confirm('Permanently remove this node from the launcher?');">
@@ -668,6 +754,7 @@ SETTINGS_HTML = """
         {% endfor %}
       </tbody>
     </table>
+    <div style="color:var(--muted);font-size:13px;margin-top:8px;">Deleting a node hides its tile permanently, even if it comes back online. The launcher updates itself with its own Update button below.</div>
   </div>
 
   <div class="card">
@@ -724,23 +811,139 @@ SETTINGS_HTML = """
     });
   }
 
-  fetch('/api/node-versions').then(function(r) { return r.json(); }).then(function(versions) {
-    Object.keys(versions).forEach(function(nodeId) {
-      var cell = document.getElementById('version-' + nodeId);
-      if (!cell) return;
-      var v = versions[nodeId];
-      if (!v) {
-        cell.textContent = 'unreachable';
-        return;
+})();
+</script>
+<script>
+// ===== Nodes table + Update All =====
+// Runs one node at a time from this page: start the update, poll until
+// the node is back on a new build (or fails / times out), then move on.
+// The admin token stays in this page only.
+(function() {
+  var NODES = {{ nodes|tojson }};
+  var POLL_MS = 3000;
+  var NODE_WAIT_MS = 5 * 60 * 1000;
+  var nodeInfo = {};          // id -> node's /api/version reply, or null
+  var tokenInput = document.getElementById('adminToken');
+  var log = document.getElementById('updateLog');
+  var allBtn = document.getElementById('updateAllBtn');
+  var COLORS = { ok: '#34d399', bad: '#f87171', warn: '#f7c948', muted: 'var(--muted)' };
+
+  function setCell(id, text, color) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = text;
+    el.style.color = color || COLORS.muted;
+  }
+
+  // canUpdate false = skip with `reason`; `ok` null means "skipped", not failed.
+  function describe(n, v) {
+    if (!n.is_online || !v) return { text: 'Offline', color: COLORS.muted, canUpdate: false, ok: null, reason: 'Offline, skipped' };
+    var ru = v.remote_update;
+    if (!ru) return { text: 'Needs manual update', color: COLORS.bad, canUpdate: false, ok: false,
+                      reason: 'Needs manual update (update it once from its own Settings)' };
+    if (ru.shared_with_launcher) return { text: 'Updates with the launcher', color: COLORS.muted, canUpdate: false, ok: null,
+                                          reason: 'Updates with the launcher, skipped' };
+    if (!ru.token_set) return { text: 'Needs manual update (no admin token set)', color: COLORS.bad, canUpdate: false, ok: false,
+                                reason: 'No admin token set on this node' };
+    if (v.error) return { text: "Can't check for updates", color: COLORS.warn, canUpdate: true };
+    if (v.update_available) return { text: 'Update available', color: COLORS.warn, canUpdate: true };
+    return { text: 'Up to date', color: COLORS.ok, canUpdate: true };
+  }
+
+  function refreshNodes() {
+    return fetch('/api/node-versions').then(function(r) { return r.json(); }).then(function(versions) {
+      NODES.forEach(function(n) {
+        var v = n.is_online ? (versions[n.id] || null) : null;
+        nodeInfo[n.id] = v;
+        setCell('build-' + n.id, v && v.current ? v.current : '—');
+        var d = describe(n, v);
+        setCell('status-' + n.id, d.text, d.color);
+      });
+    }).catch(function() {});
+  }
+
+  function logLine(label) {
+    var div = document.createElement('div');
+    log.appendChild(div);
+    return function(ok, text) {
+      var mark = ok === true ? '✓ ' : ok === false ? '✗ ' : '– ';
+      div.textContent = mark + label + ': ' + text;
+      div.style.color = ok === true ? COLORS.ok : ok === false ? COLORS.bad : COLORS.muted;
+    };
+  }
+
+  function sleep(ms) { return new Promise(function(resolve) { setTimeout(resolve, ms); }); }
+
+  async function updateNode(n, token) {
+    var set = logLine(n.label);
+    var d = describe(n, nodeInfo[n.id]);
+    if (d.canUpdate === false) { set(d.ok, d.reason); return; }
+    set(null, 'Starting…');
+
+    var base = '/api/nodes/' + encodeURIComponent(n.id);
+    var start;
+    try {
+      var r = await fetch(base + '/update', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: token })
+      });
+      start = await r.json();
+    } catch (e) { set(false, "Launcher didn't answer"); return; }
+
+    if (start.status === 'up_to_date') { set(true, 'Already up to date (' + start.build + ')'); return; }
+    if (start.status === 'offline') { set(null, 'Offline, skipped'); return; }
+    if (start.status === 'shared') { set(null, 'Updates with the launcher, skipped'); return; }
+    if (start.status !== 'started') { set(false, start.detail || 'Update failed'); return; }
+
+    set(null, 'Updating from ' + start.from_build + '…');
+    var deadline = Date.now() + NODE_WAIT_MS;
+    while (Date.now() < deadline) {
+      await sleep(POLL_MS);
+      var s;
+      try {
+        s = await (await fetch(base + '/update-status', { headers: { 'X-Admin-Token': token } })).json();
+      } catch (e) { continue; }
+      if (s.status === 'bad_token') { set(false, 'Admin token rejected'); return; }
+      if (!s.reachable) continue;                       // restarting
+      if (s.state === 'failed') { set(false, s.detail || 'Update failed'); return; }
+      if (s.build && s.build !== start.from_build && s.state !== 'running') {
+        set(true, start.from_build + ' → ' + s.build); return;
       }
-      if (v.update_available) {
-        cell.textContent = v.current + ' (update available)';
-        cell.style.color = '#f7c948';
-      } else {
-        cell.textContent = v.current || 'unknown';
-      }
+    }
+    set(false, "Didn't come back within 5 min");
+  }
+
+  function setBusy(busy) {
+    allBtn.disabled = busy;
+    document.querySelectorAll('[data-update-node]').forEach(function(b) {
+      var n = NODES.find(function(x) { return x.id === b.getAttribute('data-update-node'); });
+      b.disabled = busy || !(n && n.is_online);
     });
-  }).catch(function() {});
+  }
+
+  async function runUpdates(onlyId) {
+    var token = tokenInput.value.trim();
+    if (!token) { alert('Enter the admin token first.'); tokenInput.focus(); return; }
+    var question = onlyId ? 'Update this node now? It restarts when done.'
+                          : 'Update all nodes one at a time? Each restarts when done.';
+    if (!confirm(question)) return;
+    setBusy(true);
+    log.innerHTML = '';
+    await refreshNodes();
+    for (var i = 0; i < NODES.length; i++) {
+      if (onlyId && NODES[i].id !== onlyId) continue;
+      try { await updateNode(NODES[i], token); }
+      catch (e) { logLine(NODES[i].label)(false, 'Unexpected error'); }
+    }
+    await refreshNodes();
+    setBusy(false);
+  }
+
+  if (allBtn) allBtn.addEventListener('click', function() { runUpdates(null); });
+  document.querySelectorAll('[data-update-node]').forEach(function(b) {
+    b.addEventListener('click', function() { runUpdates(b.getAttribute('data-update-node')); });
+  });
+  refreshNodes();
 })();
 </script>
 </body>

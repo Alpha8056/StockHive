@@ -261,6 +261,7 @@ SYSTEMCTL_BIN = "/bin/systemctl"  # must match the path in the sudoers rule exac
 if REPO_DIR not in sys.path:
     sys.path.insert(0, REPO_DIR)
 import common_update
+import common_security
 
 # ============================================================
 # SECTION: Build Info + Device Controls (Settings > Device)
@@ -294,6 +295,66 @@ def _delayed_poweroff(delay: float = 1.0) -> None:
         time.sleep(delay)
         subprocess.run([SUDO_BIN, SYSTEMCTL_BIN, "poweroff"])
     threading.Thread(target=_run, daemon=True).start()
+
+
+# ------------------------------------------------------------
+# SUBSECTION: Admin token (guards update/restart/shutdown)
+# Only a salted hash is stored. With no token set, the node's own
+# buttons work as before (same-origin check only), so upgrading never
+# locks anyone out; once set, the token is required — typed into the
+# Device card, or sent as a Bearer header by the launcher.
+# ------------------------------------------------------------
+_ADMIN_TOKEN_KEY = "admin_token_hash"
+ADMIN_TOKEN_MIN_LEN = 16
+
+
+def _admin_token_set() -> bool:
+    return bool(_db.get_setting(_ADMIN_TOKEN_KEY))
+
+
+def _admin_token_ok(token: str) -> bool:
+    return common_security.token_matches(token, _db.get_setting(_ADMIN_TOKEN_KEY) or "")
+
+
+def _guard_admin_form():
+    """None if this browser POST may run a device action, else a redirect
+    explaining why not."""
+    if not common_security.same_origin_ok(request):
+        return Response("Blocked: request came from another site.", status=403, mimetype="text/plain")
+    if _admin_token_set() and not _admin_token_ok(request.form.get("admin_token", "")):
+        return redirect(_with_status("/settings", "Admin token required (or incorrect)", "danger"))
+    return None
+
+
+def _pull_and_install():
+    """git pull + pip install. Returns (ok, message-on-failure)."""
+    ok, detail = common_update.pull_latest(REPO_DIR, GIT_BIN)
+    if not ok:
+        return False, f"Update failed: {detail[:300]}"
+    ok, detail = common_update.pip_install_requirements(VENV_PIP, os.path.join(BASE_DIR, "requirements.txt"))
+    if not ok:
+        return False, f"Dependency install failed: {detail[:300]}"
+    # Refresh the cached "update available" check so /api/version shows
+    # the new build right away instead of the stale pre-pull answer.
+    common_update.check_remote_update(REPO_DIR, GIT_BIN, force=True)
+    return True, ""
+
+
+# Background update started by the launcher (a launcher request can't wait
+# minutes for pip). In memory only: after the restart it reads "idle" and
+# the launcher compares builds to confirm success.
+_update_job = {"state": "idle", "detail": ""}
+_update_job_lock = threading.Lock()
+
+
+def _run_update_job():
+    ok, detail = _pull_and_install()
+    with _update_job_lock:
+        if not ok:
+            _update_job.update(state="failed", detail=detail)
+            return
+        _update_job.update(state="restarting", detail="")
+    _delayed_restart()
 
 
 # ============================================================
@@ -2103,7 +2164,53 @@ def api_version():
     the page itself) and by the launcher's Manage Nodes list."""
     status = common_update.check_remote_update(REPO_DIR, GIT_BIN)
     status["label"] = labels.get_node_label()
-    return jsonify(status)
+    # What the launcher's Nodes table needs to decide if it can update us.
+    return jsonify(dict(status, remote_update={
+        "supported": True,
+        "token_set": _admin_token_set(),
+        "shared_with_launcher": bool(_sibling_launcher_service()),
+    }))
+
+
+# ------------------------------------------------------------
+# SUBSECTION: Remote update API (launcher "Update All")
+# Bearer-token only: a browser on another site can't send this header
+# without a CORS preflight, which these routes never grant.
+# ------------------------------------------------------------
+@app.route("/api/system/update", methods=["POST"])
+def api_system_update():
+    if not _admin_token_set():
+        return jsonify({"status": "no_token", "detail": "No admin token set on this node"}), 403
+    if not _admin_token_ok(common_security.bearer_token(request)):
+        return jsonify({"status": "bad_token", "detail": "Admin token rejected"}), 403
+    if _sibling_launcher_service():
+        return jsonify({"status": "shared", "detail": "Updates with the launcher"}), 409
+
+    with _update_job_lock:
+        if _update_job["state"] == "running":
+            return jsonify({"status": "busy", "detail": "An update is already running"}), 409
+
+    check = common_update.check_remote_update(REPO_DIR, GIT_BIN, force=True)
+    if check.get("error"):
+        return jsonify({"status": "error", "detail": f"Can't check for updates: {check['error'][:200]}"}), 502
+    if not check.get("update_available"):
+        return jsonify({"status": "up_to_date", "build": check.get("current")})
+
+    with _update_job_lock:
+        if _update_job["state"] == "running":
+            return jsonify({"status": "busy", "detail": "An update is already running"}), 409
+        _update_job.update(state="running", detail="")
+    threading.Thread(target=_run_update_job, daemon=True).start()
+    return jsonify({"status": "started", "from_build": check.get("current")}), 202
+
+
+@app.route("/api/system/update-status")
+def api_system_update_status():
+    if not _admin_token_ok(common_security.bearer_token(request)):
+        return jsonify({"status": "bad_token", "detail": "Admin token rejected"}), 403
+    with _update_job_lock:
+        job = dict(_update_job)
+    return jsonify({"state": job["state"], "detail": job["detail"], "build": _get_git_build()})
 
 
 @app.route("/api/expiring")
@@ -2297,6 +2404,24 @@ def settings_page():
     ident = identity.snapshot()
 
     node_code = get_node_code()
+    admin_set = _admin_token_set()
+    token_input = '<input type="password" name="{name}" id="{id}" autocomplete="current-password" placeholder="Admin token">'
+    if admin_set:
+        admin_token_note = ("An admin token is set. It is required for Restart, Update and Shutdown here, "
+                            "and lets the launcher's Update All update this node.")
+        admin_current_field = (
+            '<div class="fieldRow"><label class="muted" style="min-width:110px;">Current token</label>'
+            + token_input.format(name="current_token", id="adminTokenCurrent") + "</div>"
+        )
+        admin_clear_button = '<button class="btn btn-wide btn-danger" type="submit" name="action" value="clear" formnovalidate>Remove Token</button>'
+        admin_device_field = (
+            '<div class="fieldRow" style="margin-top:10px;"><label class="muted" style="min-width:110px;">Admin token</label>'
+            + token_input.format(name="device_token", id="adminTokenDevice") + "</div>"
+        )
+    else:
+        admin_token_note = ("No admin token set. Set one to require it for Restart, Update and Shutdown, "
+                            "and to allow the launcher's Update All. Use the same token on every node.")
+        admin_current_field = admin_clear_button = admin_device_field = ""
     current_theme = _valid_theme_key(ident["theme"])
     theme_options = "".join(
         f'<option value="{key}" {"selected" if key == current_theme else ""}>{t["name"]}</option>'
@@ -2397,17 +2522,37 @@ def settings_page():
       </div>
 
       <div class="card">
+        <h2>Admin Token</h2>
+        <div class="muted">{admin_token_note}</div>
+        <form method="post" action="/settings/admin-token" style="margin-top:10px;">
+          {admin_current_field}
+          <div class="fieldRow" style="margin-top:10px;">
+            <label class="muted" style="min-width:110px;">New token</label>
+            <input type="password" name="new_token" minlength="{ADMIN_TOKEN_MIN_LEN}" autocomplete="new-password" placeholder="At least {ADMIN_TOKEN_MIN_LEN} characters">
+          </div>
+          <div class="btnRow" style="margin-top:12px;">
+            <button class="btn btn-wide" type="submit" name="action" value="set">{'Change Token' if admin_set else 'Set Token'}</button>
+            {admin_clear_button}
+          </div>
+        </form>
+      </div>
+
+      <div class="card">
         <h2>Device</h2>
         <div class="muted">Build: <span class="mono">{_h(_get_git_build())}</span></div>
         <div class="muted" id="updateStatus" style="margin-top:4px;">Checking for updates&hellip;</div>
+        {admin_device_field}
         <div class="btnRow" style="margin-top:12px;">
-          <form class="inline" method="post" action="/system/restart" onsubmit="return confirm('Restart the StockHive service on this device?');">
+          <form class="inline" method="post" action="/system/restart" onsubmit="return adminSubmit(this, 'Restart the StockHive service on this device?');">
+            <input type="hidden" name="admin_token" value="">
             <button class="btn btn-wide" type="submit">Restart Service</button>
           </form>
-          <form class="inline" method="post" action="/system/update" onsubmit="return confirm('Pull the latest build from GitHub and restart? This can take a minute.');">
+          <form class="inline" method="post" action="/system/update" onsubmit="return adminSubmit(this, 'Pull the latest build from GitHub and restart? This can take a minute.');">
+            <input type="hidden" name="admin_token" value="">
             <button class="btn btn-wide btn-warn" type="submit">Update</button>
           </form>
-          <form class="inline" method="post" action="/system/shutdown" onsubmit="return confirm('Shut down this device? You will need physical or hypervisor access to turn it back on.');">
+          <form class="inline" method="post" action="/system/shutdown" onsubmit="return adminSubmit(this, 'Shut down this device? You will need physical or hypervisor access to turn it back on.');">
+            <input type="hidden" name="admin_token" value="">
             <button class="btn btn-wide btn-danger" type="submit">Shutdown Device</button>
           </form>
         </div>
@@ -2415,6 +2560,14 @@ def settings_page():
 
     </div></div>
     <script>
+    // Device buttons: confirm, then copy the typed admin token (if the
+    // field exists) into the submitting form.
+    function adminSubmit(form, question) {{
+      if (!confirm(question)) return false;
+      var field = document.getElementById('adminTokenDevice');
+      form.querySelector('input[name=admin_token]').value = field ? field.value : '';
+      return true;
+    }}
     (function() {{
       var el = document.getElementById('updateStatus');
       if (!el) return;
@@ -2438,24 +2591,21 @@ def settings_page():
 
 @app.route("/system/restart", methods=["POST"])
 def system_restart():
+    blocked = _guard_admin_form()
+    if blocked:
+        return blocked
     _delayed_restart()
     return redirect("/settings?msgtype=ok&msg=Restarting%20service%E2%80%A6")
 
 
 @app.route("/system/update", methods=["POST"])
 def system_update():
-    ok, detail = common_update.pull_latest(REPO_DIR, GIT_BIN)
+    blocked = _guard_admin_form()
+    if blocked:
+        return blocked
+    ok, detail = _pull_and_install()
     if not ok:
-        return redirect(f"/settings?msgtype=danger&msg=Update%20failed%3A%20{_u(detail[:300])}")
-
-    ok, detail = common_update.pip_install_requirements(VENV_PIP, os.path.join(BASE_DIR, "requirements.txt"))
-    if not ok:
-        return redirect(f"/settings?msgtype=danger&msg=Dependency%20install%20failed%3A%20{_u(detail[:300])}")
-
-    # Refresh the cached "update available" check immediately so /api/version
-    # reflects the new build right away instead of the stale pre-pull answer
-    # sticking around for up to _UPDATE_CACHE_SECONDS.
-    common_update.check_remote_update(REPO_DIR, GIT_BIN, force=True)
+        return redirect(_with_status("/settings", detail, "danger"))
 
     sibling = _sibling_launcher_service()
     if sibling:
@@ -2471,6 +2621,9 @@ def system_update():
 
 @app.route("/system/shutdown", methods=["POST"])
 def system_shutdown():
+    blocked = _guard_admin_form()
+    if blocked:
+        return blocked
     _delayed_poweroff()
     return redirect("/settings?msgtype=ok&msg=Shutting%20down%E2%80%A6")
 
@@ -2522,6 +2675,25 @@ def settings_update():
 def printer_test():
     ok, detail = label_printer.print_label(f"{labels.get_node_label()} test print", f"SH-{get_node_code()}-TEST")
     return redirect(_with_status("/settings", "Test print sent" if ok else detail, "ok" if ok else "danger"))
+
+
+@app.route("/settings/admin-token", methods=["POST"])
+def settings_admin_token():
+    if not common_security.same_origin_ok(request):
+        return Response("Blocked: request came from another site.", status=403, mimetype="text/plain")
+    # Setting the first token is open; changing or removing one needs it.
+    if _admin_token_set() and not _admin_token_ok(request.form.get("current_token", "")):
+        return redirect(_with_status("/settings", "Current admin token is incorrect", "danger"))
+
+    if request.form.get("action") == "clear":
+        _db.set_setting(_ADMIN_TOKEN_KEY, "")
+        return redirect(_with_status("/settings", "Admin token removed", "warn"))
+
+    new_token = (request.form.get("new_token") or "").strip()
+    if len(new_token) < ADMIN_TOKEN_MIN_LEN:
+        return redirect(_with_status("/settings", f"Admin token must be at least {ADMIN_TOKEN_MIN_LEN} characters", "danger"))
+    _db.set_setting(_ADMIN_TOKEN_KEY, common_security.hash_token(new_token))
+    return redirect(_with_status("/settings", "Admin token saved", "ok"))
 
 
 @app.route("/settings/labels", methods=["POST"])
