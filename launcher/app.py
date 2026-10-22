@@ -188,9 +188,9 @@ def api_weather():
     summary = _safe_get_weather_summary()
     try:
         points = weather_client.get_points()
-        radar_station = points.get("properties", {}).get("radarStation", "KDDC")
+        radar_station = points.get("properties", {}).get("radarStation")
     except Exception:
-        radar_station = "KDDC"
+        radar_station = None  # the page skips the radar card
 
     try:
         storm_banner = storm_proximity.get_storm_banner()
@@ -199,6 +199,8 @@ def api_weather():
 
     return jsonify({
         "weather": summary,
+        # No ZIP configured yet — the page shows "Set a ZIP in Settings".
+        "needs_zip": not weather_client.get_weather_zip(),
         # No "current" card here — carousel page 3 already shows current
         # conditions from the "weather" summary above.
         "weather_sections": ["hourly", "alerts", "forecast", "radar"],
@@ -405,7 +407,7 @@ def _get_git_build() -> str:
 
 def _sibling_node_service():
     """If a node is also installed on this machine out of this same git
-    clone (the StockHiveTest-style combo setup), pulling here changes
+    clone (the combo setup: node + launcher on one machine), pulling here changes
     code it's running too."""
     return common_update.find_sibling_service(REPO_DIR, NODE_SERVICE_NAME, "node")
 
@@ -531,7 +533,7 @@ SETTINGS_HTML = """
     <form method="post" action="/settings/weather">
       <div class="row">
         <span>ZIP Code</span>
-        <input type="text" name="zip" value="{{ weather_zip }}" maxlength="5" placeholder="67601">
+        <input type="text" name="zip" value="{{ weather_zip }}" maxlength="5" placeholder="e.g. 12345">
       </div>
       <div style="margin-top:12px;"><button class="btn" type="submit">Save</button></div>
     </form>

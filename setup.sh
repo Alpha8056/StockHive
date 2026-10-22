@@ -167,7 +167,7 @@ $REAL_USER ALL=(ALL) NOPASSWD: /bin/systemctl poweroff
 EOF
   if $INSTALL_LAUNCHER; then
     # Both installed on this one machine out of the same clone (the
-    # StockHiveTest-style combo setup) — Settings > Update on the node
+    # combo setup: node + launcher on one machine) — Settings > Update on the node
     # also pulls the launcher's code, so it needs to be able to restart
     # that service too, not just its own.
     echo "$REAL_USER ALL=(ALL) NOPASSWD: /bin/systemctl restart stockpi-launcher.service" >> /etc/sudoers.d/stockpi-node

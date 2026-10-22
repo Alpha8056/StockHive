@@ -266,7 +266,7 @@ def _get_git_build() -> str:
 
 def _sibling_launcher_service():
     """If the launcher is also installed on this machine out of this
-    same git clone (the StockHiveTest-style combo setup), pulling here
+    same git clone (the combo setup: node + launcher on one machine), pulling here
     changes code it's running too."""
     return common_update.find_sibling_service(REPO_DIR, LAUNCHER_SERVICE_NAME, "launcher")
 

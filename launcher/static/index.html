@@ -422,6 +422,8 @@ function renderTodayGlance(d){
     html += `<div class="glanceTemp">${esc(wx.temp)}</div>
       <div class="glanceCond">${esc(wx.condition)}</div>
       <div class="glanceSub">High/Low: <b>${esc(wx.hi)}</b>/<b>${esc(wx.lo)}</b> &bull; Precip: <b>${esc(wx.precip)}</b></div>`;
+  } else if(d && d.needs_zip){
+    html += `<div class="glanceCond">Set a ZIP in Settings</div>`;
   } else {
     html += `<div class="glanceCond">Weather unavailable right now.</div>`;
   }
@@ -483,6 +485,8 @@ setInterval(loadNodes, 10000);
 // so this section starts at the hourly forecast.
 function buildWeather(d){
   let html = '<div class="sectionTitle">Weather</div>';
+  if(d.needs_zip)
+    return html + `<div class="wxCard"><div class="wxTitle">Set a ZIP in Settings</div></div>`;
   for(const section of (d.weather_sections || [])){
     if(section === "hourly" && d.hourly && d.hourly.length){
       html += `<div class="wxCard"><div class="wxTitle">Hourly Forecast</div>

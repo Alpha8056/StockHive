@@ -127,7 +127,7 @@ def pip_install_requirements(pip_bin: str, requirements_path: str):
 
 def find_sibling_service(repo_dir: str, other_unit_name: str, other_subdir: str):
     """
-    Detects the StockHiveTest-style combo case: this machine also runs
+    Detects the combo case (node + launcher on one machine): this machine also runs
     `other_unit_name` (e.g. the launcher, from a node's point of view)
     out of the *same* git clone, so pulling here changes code that
     service is running too. Confirmed by reading the sibling's installed

@@ -21,3 +21,5 @@ StockPi-InfoPanel-main/
 # Local planning artifact, not part of the app
 StockHive Claude info.txt
 
+# Local Claude Code permissions (machine-specific paths)
+.claude/settings.local.json

@@ -74,16 +74,16 @@ def _get_json(url: str, ttl_seconds: int, cache_key: str) -> Dict[str, Any]:
 
 def _read_config() -> Dict[str, Any]:
     if not os.path.exists(CONFIG_PATH):
-        # default config if missing
-        return {"weather": {"zip": "67601"}}
+        # No ZIP until one is set in Settings (or by setup.sh).
+        return {"weather": {"zip": ""}}
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
 def get_weather_zip() -> str:
+    """The configured ZIP, or "" if none is set."""
     cfg = _read_config()
-    z = str(cfg.get("weather", {}).get("zip", "67601")).strip()
-    return z or "67601"
+    return str(cfg.get("weather", {}).get("zip", "")).strip()
 
 
 def set_weather_zip(zip_code: str) -> None:
@@ -105,6 +105,8 @@ def resolve_zip_to_latlon(zip_code: Optional[str] = None) -> Tuple[float, float]
     cached for a week.
     """
     zip_code = (zip_code or get_weather_zip()).strip()
+    if not zip_code:
+        raise ValueError("No ZIP set")
 
     cached = _load_cache(f"zip_{zip_code}", ttl_seconds=7 * 24 * 3600)
     if cached:
