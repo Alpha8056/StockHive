@@ -216,8 +216,10 @@ const THEME_ACCENTS = {
   sepia: "#d4a373",         // tan
 };
 
+// Safe in text and in quoted attributes.
 function esc(s){
-  return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
 }
 
 function tick(){
@@ -458,7 +460,7 @@ function renderGrid(nodes){
     const kioskHash = window.StockHiveKiosk ? StockHiveKiosk.tileHash() : "";
     const href = n.is_online && n.url ? n.url + kioskHash : "#";
     const cls = "tile" + (n.is_online ? "" : " offline");
-    return `<a class="${cls}" style="--accent:${accent}" href="${href}">
+    return `<a class="${cls}" style="--accent:${accent}" href="${esc(href)}">
       <div class="tileLabel">${esc(n.label)}</div>
       <div class="tileMeta">${esc(n.ip || "")}</div>
       <div class="tileStatus">${statusHtml}</div>

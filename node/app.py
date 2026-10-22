@@ -127,7 +127,7 @@ import re
 def _apps_button_html() -> str:
     launcher_url = identity.snapshot().get("launcher_url") or "/"
     return (
-        f'<a href="{launcher_url}" id="appsBtn" style="'
+        f'<a href="{_h(launcher_url)}" id="appsBtn" style="'
         'position:fixed;top:12px;left:12px;'
         'padding:10px 14px;'
         'border-radius:12px;'
@@ -614,10 +614,25 @@ def _auto_hide_banner_js():
 
 
 # ------------------------------------------------------------
+# SUBSECTION: Escaping helpers
+# Every user/DB/URL value goes through _h() before landing in HTML
+# (text or attribute), and through _u() before landing in a URL.
+# ------------------------------------------------------------
+def _h(value) -> str:
+    return escape("" if value is None else str(value), quote=True)
+
+
+def _u(value) -> str:
+    return quote("" if value is None else str(value), safe="")
+
+
+# ------------------------------------------------------------
 # SUBSECTION: Banner HTML (reads msg/msgtype from querystring)
 # ------------------------------------------------------------
 def _page_status_html():
-    msg = request.args.get("msg", "")
+    # msg comes from the URL, so it's always shown as plain text; any
+    # banner that needs markup (Print label) builds it here itself.
+    msg = _h(request.args.get("msg", ""))
     msgtype = request.args.get("msgtype", "ok")
     if not msg:
         return ""
@@ -685,7 +700,7 @@ def _expiration_badge_html(expiration_date):
     # the emoji this used to show rendered as a blank "tofu" box on the
     # kiosk Pi's Chromium, which has no emoji font installed.
     cls = "qty-zero" if status["level"] in ("expired", "today") else "qty-low"
-    return f"<span class='{cls}' title='{status['label']}'>{status['label']}</span>"
+    return f"<span class='{cls}' title='{_h(status['label'])}'>{_h(status['label'])}</span>"
 
 
 def _expiring_summary():
@@ -747,9 +762,9 @@ def _zone_buttons(current_zone, current_shelf, loc_map):
     html = ""
     for name in sorted(loc_map.keys()):
         if loc_map.get(name, False):
-            html += f"""<a class="btn zone-btn" href="/?zone={name.replace(' ', '%20')}&shelf={current_shelf}">{name}</a>"""
+            html += f"""<a class="btn zone-btn" href="/?zone={_u(name)}&shelf={current_shelf}">{_h(name)}</a>"""
         else:
-            html += f"""<a class="btn zone-btn" href="/?zone={name.replace(' ', '%20')}">{name}</a>"""
+            html += f"""<a class="btn zone-btn" href="/?zone={_u(name)}">{_h(name)}</a>"""
     return html
 
 
@@ -765,7 +780,7 @@ def _shelf_selector(current_zone, current_shelf, loc_map):
     return f"""
       <div class="row">
         <form method="get" action="/" class="fieldRow">
-          <input type="hidden" name="zone" value="{current_zone}">
+          <input type="hidden" name="zone" value="{_h(current_zone)}">
           <b>Shelf #:</b>
           <select name="shelf" onchange="this.form.submit()">
             {options}
@@ -776,19 +791,19 @@ def _shelf_selector(current_zone, current_shelf, loc_map):
     """
 
 def _home_url(zone, shelf, focus='scan', msg="", msgtype="ok", undo=None, print_code=None):
-    url = f"/?zone={zone.replace(' ', '%20')}&shelf={shelf}&focus={focus}&msgtype={msgtype}"
+    url = f"/?zone={_u(zone)}&shelf={shelf}&focus={_u(focus)}&msgtype={_u(msgtype)}"
     if msg:
-        url += f"&msg={msg.replace(' ', '%20')}"
+        url += f"&msg={_u(msg)}"
     if undo:
         url += f"&undo={int(undo)}"
     if print_code:
-        url += f"&print={quote(print_code)}"
+        url += f"&print={_u(print_code)}"
     return url
 
 def _home_href(zone, shelf, focus='scan', msg="", msgtype="ok"):
-    url = f"/?zone={zone.replace(' ', '%20')}&shelf={shelf}&focus={focus}&msgtype={msgtype}"
+    url = f"/?zone={_u(zone)}&shelf={shelf}&focus={_u(focus)}&msgtype={_u(msgtype)}"
     if msg:
-        url += f"&msg={msg.replace(' ', '%20')}"
+        url += f"&msg={_u(msg)}"
     return url
 
 
@@ -800,7 +815,8 @@ def _home_href(zone, shelf, focus='scan', msg="", msgtype="ok"):
 def home():
     zone, shelf, loc_map = _selected_zone_shelf()
     location = _build_location(zone, shelf, loc_map)
-    focus = request.args.get("focus", "scan")
+    # Whitelisted: this lands inside a <script> block.
+    focus = "remove" if request.args.get("focus") == "remove" else "scan"
     status_html = _page_status_html()
 
     focus_js = f"""
@@ -821,8 +837,8 @@ def home():
     {_styles()}{_auto_hide_banner_js()}{focus_js}
     <div class="wrap"><div class="container">
       <header>
-        <div><h1>{node_label} <span style="font-size:13px;font-weight:400;opacity:0.6">v{VERSION}</span></h1><div class="sub">Fast scan, local-first, touchscreen-friendly</div></div>
-        <div class="muted" style="text-align:right">Location <span class="chip">{location}</span><br><span style="font-size:12px">Data as of {page_loaded_at}</span></div>
+        <div><h1>{_h(node_label)} <span style="font-size:13px;font-weight:400;opacity:0.6">v{VERSION}</span></h1><div class="sub">Fast scan, local-first, touchscreen-friendly</div></div>
+        <div class="muted" style="text-align:right">Location <span class="chip">{_h(location)}</span><br><span style="font-size:12px">Data as of {page_loaded_at}</span></div>
       </header>
 
       {status_html}
@@ -838,18 +854,18 @@ def home():
 
       <div class="card">
         <h2>Scan (+1)</h2>
-        <form method="post" action="/scan?zone={zone.replace(' ', '%20')}&shelf={shelf}">
+        <form method="post" action="/scan?zone={_u(zone)}&shelf={shelf}">
           <div class="fieldRow">
             <input id="scan_barcode" type="text" name="barcode" placeholder="Scan barcode">
             <button class="btn btn-wide" type="submit">Scan</button>
           </div>
         </form>
-        <div class="muted row"><a class="muted" style="text-decoration:underline;" href="/custom-barcode?zone={zone.replace(' ', '%20')}&shelf={shelf}">No barcode? Create one &rarr;</a></div>
+        <div class="muted row"><a class="muted" style="text-decoration:underline;" href="/custom-barcode?zone={_u(zone)}&shelf={shelf}">No barcode? Create one &rarr;</a></div>
       </div>
 
       <div class="card">
         <h2>Remove (-1)</h2>
-        <form method="post" action="/remove-one?zone={zone.replace(' ', '%20')}&shelf={shelf}">
+        <form method="post" action="/remove-one?zone={_u(zone)}&shelf={shelf}">
           <div class="fieldRow">
             <input id="remove_barcode" type="text" name="barcode" placeholder="Scan to remove">
             <button class="btn btn-wide btn-danger" type="submit">Remove</button>
@@ -858,9 +874,9 @@ def home():
       </div>
 
       <div class="navRow">
-        <a class="btn btn-wide" href="/move?zone={zone.replace(' ', '%20')}&shelf={shelf}">Move Location</a>
+        <a class="btn btn-wide" href="/move?zone={_u(zone)}&shelf={shelf}">Move Location</a>
         <a class="btn btn-wide" href="/inventory">Inventory</a>
-        <a class="btn btn-wide" href="/grocery-list">{labels.get_labels()['grocery_low_stock']}</a>
+        <a class="btn btn-wide" href="/grocery-list">{_h(labels.get_labels()['grocery_low_stock'])}</a>
         <a class="btn btn-wide" href="/tools">Tools</a>
       </div>
 
@@ -1041,11 +1057,11 @@ def move_page():
         <h2>Move Location</h2>
         {status_html}
         <div class="muted">Pick the new location, then scan the item you want to move.</div>
-        <div class="row"><b>New target:</b> <span class="chip">{location}</span></div>
+        <div class="row"><b>New target:</b> <span class="chip">{_h(location)}</span></div>
         <div class="row">{_zone_buttons(zone, shelf, loc_map)}</div>
         {_shelf_selector(zone, shelf, loc_map)}
 
-        <form method="post" action="/move-scan?zone={zone.replace(' ', '%20')}&shelf={shelf}">
+        <form method="post" action="/move-scan?zone={_u(zone)}&shelf={shelf}">
           <div class="fieldRow">
             <input type="text" name="barcode" placeholder="Scan item to move" autofocus>
             <button class="btn btn-wide" type="submit">Scan</button>
@@ -1067,11 +1083,11 @@ def move_scan():
 
     barcode = (request.form.get("barcode", "") or "").strip()
     if not barcode:
-        return redirect(f"/move?zone={zone.replace(' ', '%20')}&shelf={shelf}&msgtype=danger&msg=Barcode%20required")
+        return redirect(f"/move?zone={_u(zone)}&shelf={shelf}&msgtype=danger&msg=Barcode%20required")
 
     item = get_item_by_barcode(barcode)
     if not item:
-        return redirect(f"/move?zone={zone.replace(' ', '%20')}&shelf={shelf}&msgtype=danger&msg=Item%20not%20found")
+        return redirect(f"/move?zone={_u(zone)}&shelf={shelf}&msgtype=danger&msg=Item%20not%20found")
 
     current_location = item[2]
     name = item[1]
@@ -1081,16 +1097,16 @@ def move_scan():
     <div class="wrap"><div class="container">
       <div class="card">
         <h2>Confirm Move</h2>
-        <div class="row"><b>{name}</b></div>
-        <div class="row muted">From: <span class="chip">{current_location}</span></div>
-        <div class="row muted">To: <span class="chip">{new_location}</span></div>
+        <div class="row"><b>{_h(name)}</b></div>
+        <div class="row muted">From: <span class="chip">{_h(current_location)}</span></div>
+        <div class="row muted">To: <span class="chip">{_h(new_location)}</span></div>
 
-        <form method="post" action="/move-save?zone={zone.replace(' ', '%20')}&shelf={shelf}">
-          <input type="hidden" name="barcode" value="{barcode}">
-          <input type="hidden" name="new_location" value="{new_location}">
+        <form method="post" action="/move-save?zone={_u(zone)}&shelf={shelf}">
+          <input type="hidden" name="barcode" value="{_h(barcode)}">
+          <input type="hidden" name="new_location" value="{_h(new_location)}">
           <div class="fieldRow">
             <button class="btn btn-wide" type="submit">Move</button>
-            <a class="btn" href="/move?zone={zone.replace(' ', '%20')}&shelf={shelf}">Cancel</a>
+            <a class="btn" href="/move?zone={_u(zone)}&shelf={shelf}">Cancel</a>
           </div>
         </form>
       </div>
@@ -1106,7 +1122,7 @@ def move_save():
 
     move_location(barcode, new_location)
     return redirect(
-        f"/move?zone={zone.replace(' ', '%20')}&shelf={shelf}&msgtype=ok&msg=Moved%20item%20to%20{new_location.replace(' ', '%20')}"
+        f"/move?zone={_u(zone)}&shelf={shelf}&msgtype=ok&msg=Moved%20item%20to%20{_u(new_location)}"
     )
 
 
@@ -1157,7 +1173,7 @@ def inventory_page():
     zone_options = "<option value='All'>All</option>"
     for z in sorted(loc_map.keys()):
         sel = "selected" if z == zone_filter else ""
-        zone_options += f"<option value='{z}' {sel}>{z}</option>"
+        zone_options += f"<option value='{_h(z)}' {sel}>{_h(z)}</option>"
 
     rows = ""
     for barcode, name, location, qty, low, expiration_date in filtered:
@@ -1183,31 +1199,31 @@ def inventory_page():
         if exp_badge:
             exp_cell = exp_badge
         elif expiration_date:
-            exp_cell = f'<span class="invLabel">Expires </span>{expiration_date}'
+            exp_cell = f'<span class="invLabel">Expires </span>{_h(expiration_date)}'
         else:
             exp_cell = '<span class="invNoExpire">-</span>'
 
         photo = photos_map.get(barcode)
         if photo:
-            thumb_html = f'<img class="item-thumb" src="/static/photos/thumbs/{photo}" alt="">'
+            thumb_html = f'<img class="item-thumb" src="/static/photos/thumbs/{_h(photo)}" alt="">'
         else:
             thumb_html = f'<span class="item-thumb item-thumb-placeholder">{_PHOTO_PLACEHOLDER_SVG}</span>'
 
         rows += f"""
         <div class="invRow">
-          <div class="invCell-item"><div class="item-cell">{thumb_html}<span>{name}</span></div></div>
+          <div class="invCell-item"><div class="item-cell">{thumb_html}<span>{_h(name)}</span></div></div>
           <div class="invBody">
             <div class="invLeft">
               <div class="invMeta">
-                <div class="invCell-location">{location}</div>
+                <div class="invCell-location">{_h(location)}</div>
                 <div class="invCell-expires">{exp_cell}</div>
               </div>
               <div class="invCell-actions">
                 <form class="inline" method="post" action="/inventory-remove">
-                  <input type="hidden" name="barcode" value="{barcode}">
+                  <input type="hidden" name="barcode" value="{_h(barcode)}">
                   <button class="btn btn-danger">-1</button>
                 </form>
-                <a class="btn" href="/edit?barcode={barcode}">Edit</a>
+                <a class="btn" href="/edit?barcode={_u(barcode)}">Edit</a>
               </div>
             </div>
             <div class="invQtyBlock">
@@ -1239,7 +1255,7 @@ def inventory_page():
 
       <div class="card">
         <div class="fieldRow">
-          <a class="btn btn-wide" href="/grocery-list">{labels.get_labels()['grocery_low_stock']}</a>
+          <a class="btn btn-wide" href="/grocery-list">{_h(labels.get_labels()['grocery_low_stock'])}</a>
           <a class="btn btn-wide" href="/expiring">Expiring Items</a>
           <a class="btn btn-wide" href="{export_txt}">Export as Text</a>
           <a class="btn btn-wide" href="{print_view}">Print / Save as PDF</a>
@@ -1250,7 +1266,7 @@ def inventory_page():
         <h2>Search</h2>
         <form method="get" action="/inventory">
           <div class="fieldRow">
-            <input type="text" name="q" id="invSearch" placeholder="Search by name or barcode" value="{request.args.get('q','')}" autofocus>
+            <input type="text" name="q" id="invSearch" placeholder="Search by name or barcode" value="{_h(request.args.get('q',''))}" autofocus>
             <select name="zone">{zone_options}</select>
             <button class="btn btn-wide" type="submit">Apply</button>
             <a class="btn" href="/inventory">Clear</a>
@@ -1339,7 +1355,7 @@ def threshold_set():
     set_low_threshold(barcode, thr_i)
     item = get_item_by_barcode(barcode)
     name = item[1] if item else "item"
-    return redirect(f"/edit?barcode={barcode}&msgtype=ok&msg=Set%20low%20threshold%20for%20{name.replace(' ', '%20')}")
+    return redirect(f"/edit?barcode={_u(barcode)}&msgtype=ok&msg=Set%20low%20threshold%20for%20{_u(name)}")
 
 
 @app.route("/inventory-remove", methods=["POST"])
@@ -1355,7 +1371,7 @@ def inventory_remove():
     event_id = remove_one(barcode)
     new_qty = max(int(item[3]) - 1, 0)
     undo_param = f"&undo={int(event_id)}" if event_id else ""
-    return redirect(f"/inventory?msgtype=danger&msg={item[1].replace(' ', '%20')}%20-1({new_qty}){undo_param}")
+    return redirect(f"/inventory?msgtype=danger&msg={_u(item[1])}%20-1({new_qty}){undo_param}")
 
 
 # ============================================================
@@ -1444,7 +1460,7 @@ def inventory_delete():
     delete_item(barcode)
     if photo:
         photos.delete_photo(photo)
-    return redirect(f"/inventory?msgtype=danger&msg=Deleted%20{item[1].replace(' ', '%20')}")
+    return redirect(f"/inventory?msgtype=danger&msg=Deleted%20{_u(item[1])}")
 
 
 @app.route("/edit")
@@ -1461,7 +1477,7 @@ def edit_item_page():
     status_html = _page_status_html()
 
     if photo:
-        photo_box_html = f'<img src="/static/photos/{photo}" alt="">'
+        photo_box_html = f'<img src="/static/photos/{_h(photo)}" alt="">'
         remove_photo_html = """
           <label class="fieldRow" style="margin-top:10px;gap:8px;">
             <input type="checkbox" name="remove_photo" value="1"> Remove current photo
@@ -1475,10 +1491,10 @@ def edit_item_page():
     alias_rows = "".join(
         f"""
         <div class="fieldRow" style="margin-top:8px;">
-          <span class="chip mono">{a}</span>
+          <span class="chip mono">{_h(a)}</span>
           <form class="inline" method="post" action="/edit/alias-remove">
-            <input type="hidden" name="barcode" value="{barcode}">
-            <input type="hidden" name="alias" value="{a}">
+            <input type="hidden" name="barcode" value="{_h(barcode)}">
+            <input type="hidden" name="alias" value="{_h(a)}">
             <button class="btn btn-danger" type="submit" title="Unlink this barcode">Remove</button>
           </form>
         </div>
@@ -1496,12 +1512,12 @@ def edit_item_page():
       {status_html}
       <div class="card">
         <form method="post" action="/edit-save" enctype="multipart/form-data">
-          <input type="hidden" name="barcode" value="{barcode}">
+          <input type="hidden" name="barcode" value="{_h(barcode)}">
           <div class="fieldRow" style="margin-bottom:14px;">
             <label style="color:var(--muted);font-size:14px;">Item Name</label>
           </div>
           <div class="fieldRow">
-            <input type="text" name="name" value="{name}" placeholder="Item name" required>
+            <input type="text" name="name" value="{_h(name)}" placeholder="Item name" required>
           </div>
           <div class="fieldRow" style="margin-top:14px;margin-bottom:14px;">
             <label style="color:var(--muted);font-size:14px;" for="editQuantity">Quantity</label>
@@ -1515,13 +1531,13 @@ def edit_item_page():
             <label style="color:var(--muted);font-size:14px;">Expiration Date (optional)</label>
           </div>
           <div class="fieldRow">
-            <input type="date" name="expiration_date" value="{expiration_date or ''}">
+            <input type="date" name="expiration_date" value="{_h(expiration_date or '')}">
           </div>
           <div class="fieldRow" style="margin-top:14px;margin-bottom:14px;">
             <label style="color:var(--muted);font-size:14px;">Aisle (optional)</label>
           </div>
           <div class="fieldRow">
-            <input type="text" name="aisle" value="{aisle or ''}" placeholder="e.g. A3, 7, Produce">
+            <input type="text" name="aisle" value="{_h(aisle or '')}" placeholder="e.g. A3, 7, Produce">
           </div>
           <div class="fieldRow" style="margin-top:14px;margin-bottom:14px;">
             <label style="color:var(--muted);font-size:14px;">Photo (optional)</label>
@@ -1536,7 +1552,7 @@ def edit_item_page():
           <div class="fieldRow" style="margin-top:16px;">
             <button class="btn btn-wide" type="submit">Save</button>
           </div>
-          <div class="muted" style="margin-top:10px;">Barcode: <span class="chip mono">{barcode}</span> &nbsp; Location: <span class="chip">{location}</span></div>
+          <div class="muted" style="margin-top:10px;">Barcode: <span class="chip mono">{_h(barcode)}</span> &nbsp; Location: <span class="chip">{_h(location)}</span></div>
         </form>
       </div>
 
@@ -1545,7 +1561,7 @@ def edit_item_page():
         <div class="muted">Other barcodes that count as this item — useful when the same product scans differently from different angles/labels (e.g. UPC vs. EAN), or a resealed/relabeled version.</div>
         {alias_rows}
         <form method="post" action="/edit/alias-add" style="margin-top:14px;">
-          <input type="hidden" name="barcode" value="{barcode}">
+          <input type="hidden" name="barcode" value="{_h(barcode)}">
           <div class="fieldRow">
             <input type="text" name="alias" placeholder="Barcode to link" required>
             <button class="btn btn-warn" type="submit">Link Barcode</button>
@@ -1557,7 +1573,7 @@ def edit_item_page():
         <h2>Low Stock Threshold</h2>
         <div class="muted">Flags this item as low stock on the Grocery &amp; Low Stock page once quantity drops to or below this number.</div>
         <form method="post" action="/threshold-set" style="margin-top:10px;">
-          <input type="hidden" name="barcode" value="{barcode}">
+          <input type="hidden" name="barcode" value="{_h(barcode)}">
           <div class="fieldRow">
             <input class="mono" style="width:100px;" type="number" min="0" name="threshold" value="{low}" title="Low threshold">
             <button class="btn btn-wide" type="submit">Set</button>
@@ -1568,14 +1584,14 @@ def edit_item_page():
       <div class="card">
         <h2>More</h2>
         <div class="fieldRow">
-          <a class="btn btn-wide btn-warn" href="/stats?barcode={barcode}">View Stats</a>
+          <a class="btn btn-wide btn-warn" href="/stats?barcode={_u(barcode)}">View Stats</a>
           <form class="inline" method="post" action="/print-label">
-            <input type="hidden" name="barcode" value="{barcode}">
-            <input type="hidden" name="back" value="/edit?barcode={quote(barcode)}">
+            <input type="hidden" name="barcode" value="{_h(barcode)}">
+            <input type="hidden" name="back" value="/edit?barcode={_u(barcode)}">
             <button class="btn btn-wide" type="submit">Print Label</button>
           </form>
           <form class="inline" method="post" action="/inventory-delete">
-            <input type="hidden" name="barcode" value="{barcode}">
+            <input type="hidden" name="barcode" value="{_h(barcode)}">
             <button class="btn btn-wide btn-danger" type="submit">Delete Item</button>
           </form>
         </div>
@@ -1600,12 +1616,12 @@ def edit_alias_add():
     barcode = (request.form.get("barcode", "") or "").strip()
     alias = (request.form.get("alias", "") or "").strip()
     if not barcode or not alias:
-        return redirect(f"/edit?barcode={barcode}&msgtype=danger&msg=Barcode%20required")
+        return redirect(f"/edit?barcode={_u(barcode)}&msgtype=danger&msg=Barcode%20required")
     try:
         add_barcode_alias(alias, barcode)
-        return redirect(f"/edit?barcode={barcode}&msgtype=ok&msg=Linked%20{alias}")
+        return redirect(f"/edit?barcode={_u(barcode)}&msgtype=ok&msg=Linked%20{_u(alias)}")
     except Exception as e:
-        return redirect(f"/edit?barcode={barcode}&msgtype=danger&msg={quote(str(e))}")
+        return redirect(f"/edit?barcode={_u(barcode)}&msgtype=danger&msg={_u(str(e))}")
 
 
 @app.route("/edit/alias-remove", methods=["POST"])
@@ -1614,9 +1630,9 @@ def edit_alias_remove():
     alias = (request.form.get("alias", "") or "").strip()
     try:
         remove_barcode_alias(alias)
-        return redirect(f"/edit?barcode={barcode}&msgtype=ok&msg=Unlinked%20{alias}")
+        return redirect(f"/edit?barcode={_u(barcode)}&msgtype=ok&msg=Unlinked%20{_u(alias)}")
     except Exception as e:
-        return redirect(f"/edit?barcode={barcode}&msgtype=danger&msg={quote(str(e))}")
+        return redirect(f"/edit?barcode={_u(barcode)}&msgtype=danger&msg={_u(str(e))}")
 
 
 PHOTO_UPLOAD_MAX_BYTES = 8 * 1024 * 1024  # 8MB — generous for a phone camera JPEG
@@ -1656,7 +1672,7 @@ def edit_item_save():
     if raw_quantity is not None:
         new_qty, qty_error = _parse_quantity(raw_quantity)
         if qty_error:
-            return redirect(f"/edit?barcode={quote(barcode)}&msgtype=danger&msg={quote(qty_error)}")
+            return redirect(f"/edit?barcode={_u(barcode)}&msgtype=danger&msg={_u(qty_error)}")
 
     # Only touch quantity if the field was actually changed from what the
     # page loaded with — otherwise a scan made while this page was open
@@ -1680,7 +1696,7 @@ def edit_item_save():
         try:
             new_filename = photos.save_photo(photo_file)
         except ValueError as e:
-            return redirect(f"/edit?barcode={barcode}&msgtype=danger&msg={quote(str(e))}")
+            return redirect(f"/edit?barcode={_u(barcode)}&msgtype=danger&msg={_u(str(e))}")
         old_photo = get_item_photo(barcode)
         set_item_photo(barcode, new_filename)
         if old_photo:
@@ -1701,11 +1717,11 @@ def edit_item_save():
         # Recent Changes (newest first).
         event_id = set_quantity(barcode, new_qty) if qty_changed else None
         if event_id:
-            msg = quote(f"Saved {new_name} — quantity set to {new_qty}")
+            msg = _u(f"Saved {new_name} — quantity set to {new_qty}")
             return redirect(f"/inventory?msgtype=ok&msg={msg}&undo={int(event_id)}")
-        return redirect(f"/inventory?msgtype=ok&msg=Saved%20{new_name.replace(' ', '%20')}")
+        return redirect(f"/inventory?msgtype=ok&msg=Saved%20{_u(new_name)}")
     except Exception as e:
-        return redirect(f"/inventory?msgtype=danger&msg=Error%3A%20{str(e).replace(' ', '%20')}")
+        return redirect(f"/inventory?msgtype=danger&msg=Error%3A%20{_u(str(e))}")
 
 
 QUANTITY_MAX = 100000  # typo guard for the Edit page's exact-quantity field
@@ -1770,10 +1786,10 @@ def stats_page():
       </header>
 
       <div class="card">
-        <h2>{name}</h2>
-        <div class="muted">Barcode: <span class="chip mono">{barcode}</span></div>
+        <h2>{_h(name)}</h2>
+        <div class="muted">Barcode: <span class="chip mono">{_h(barcode)}</span></div>
         <div class="row">
-          <div class="muted">Location <span class="chip">{location}</span></div>
+          <div class="muted">Location <span class="chip">{_h(location)}</span></div>
           <div class="muted">Qty <span class="chip">{qty}</span></div>
           <div class="muted">Low threshold <span class="chip">{low if low else 0}</span></div>
         </div>
@@ -1866,13 +1882,13 @@ def grocery_list_page():
         barcode = row[0]
         name = row[1]
         aisle = aisle_map.get(barcode)
-        aisle_html = f'<span class="chip">{aisle}</span>' if aisle else ""
+        aisle_html = f'<span class="chip">{_h(aisle)}</span>' if aisle else ""
         lis += f"""
         <li style="margin: 10px 0; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
-          <span>{name}</span>
+          <span>{_h(name)}</span>
           {aisle_html}
           <form class="inline" method="post" action="/grocery-remove">
-            <input type="hidden" name="barcode" value="{barcode}">
+            <input type="hidden" name="barcode" value="{_h(barcode)}">
             <button class="btn btn-danger">Remove</button>
           </form>
         </li>
@@ -1882,12 +1898,12 @@ def grocery_list_page():
     for barcode, name, location, qty, low in low_items:
         low_rows += f"""
         <tr>
-          <td>{name}</td>
-          <td>{location}</td>
+          <td>{_h(name)}</td>
+          <td>{_h(location)}</td>
           <td><span class="qty-low">{int(qty)}</span></td>
           <td>{int(low)}</td>
           <td>
-            <a class="btn btn-warn" href="/stats?barcode={barcode}">Stats</a>
+            <a class="btn btn-warn" href="/stats?barcode={_u(barcode)}">Stats</a>
           </td>
         </tr>
         """
@@ -1896,7 +1912,7 @@ def grocery_list_page():
     {_styles()}{_auto_hide_banner_js()}
     <div class="wrap"><div class="container">
       <header>
-        <div><h1>{L['grocery_low_stock']}</h1><div class="sub">Everything you need to restock, in one place</div></div>
+        <div><h1>{_h(L['grocery_low_stock'])}</h1><div class="sub">Everything you need to restock, in one place</div></div>
         <a class="btn" href="{_home_href(zone, shelf, focus='scan')}">Home</a>
       </header>
 
@@ -1904,7 +1920,7 @@ def grocery_list_page():
 
       <div class="twoCol">
         <div class="card">
-          <h2>{L['grocery_list']}</h2>
+          <h2>{_h(L['grocery_list'])}</h2>
           <div class="muted">Items that hit 0 quantity</div>
           <div class="fieldRow" style="margin-top:10px;">
             <a class="btn" href="{export_txt}">Export</a>
@@ -1941,7 +1957,7 @@ def grocery_remove():
 
     delete_grocery_only(barcode)
     return redirect(
-        f"/grocery-list?msgtype=ok&msg=Removed%20{item[1].replace(' ', '%20')}%20from%20grocery%20list"
+        f"/grocery-list?msgtype=ok&msg=Removed%20{_u(item[1])}%20from%20grocery%20list"
     )
 
 
@@ -1963,15 +1979,15 @@ def expiring_page():
         label = status.get("label", "")
         rows += f"""
         <tr>
-          <td>{name}</td>
-          <td>{location}</td>
+          <td>{_h(name)}</td>
+          <td>{_h(location)}</td>
           <td>{int(qty)}</td>
-          <td>{expiration_date}</td>
-          <td><span class="{cls}">{label}</span></td>
+          <td>{_h(expiration_date)}</td>
+          <td><span class="{cls}">{_h(label)}</span></td>
           <td>
-            <a class="btn" href="/edit?barcode={barcode}">Edit</a>
+            <a class="btn" href="/edit?barcode={_u(barcode)}">Edit</a>
             <form class="inline" method="post" action="/expiring/dismiss">
-              <input type="hidden" name="barcode" value="{barcode}">
+              <input type="hidden" name="barcode" value="{_h(barcode)}">
               <button class="btn btn-warn" type="submit" title="Hide this item's expiration alert until its date changes">Dismiss</button>
             </form>
           </td>
@@ -1982,13 +1998,13 @@ def expiring_page():
     dismissed_rows = "".join(
         f"""
         <tr>
-          <td>{name}</td>
-          <td>{location}</td>
+          <td>{_h(name)}</td>
+          <td>{_h(location)}</td>
           <td>{int(qty)}</td>
-          <td>{expiration_date}</td>
+          <td>{_h(expiration_date)}</td>
           <td>
             <form class="inline" method="post" action="/expiring/undismiss">
-              <input type="hidden" name="barcode" value="{barcode}">
+              <input type="hidden" name="barcode" value="{_h(barcode)}">
               <button class="btn" type="submit">Undismiss</button>
             </form>
           </td>
@@ -2120,11 +2136,11 @@ def tools_page():
         has_shelves = "Yes" if bool(l["has_shelves"]) else "No"
         rows += f"""
         <tr>
-          <td>{name}</td>
+          <td>{_h(name)}</td>
           <td>{has_shelves}</td>
           <td>
             <form class="inline" method="post" action="/locations-delete">
-              <input type="hidden" name="name" value="{name}">
+              <input type="hidden" name="name" value="{_h(name)}">
               <button class="btn btn-danger">Delete</button>
             </form>
           </td>
@@ -2217,8 +2233,8 @@ def settings_page():
         if err:
             restart_failures.append(f"{svc}: {err}")
     if restart_failures:
-        detail = " | ".join(restart_failures).replace("<", "&lt;").replace(">", "&gt;")
-        status_html += f"<div id='restartFailBanner' class='status danger'>Restart/update did not take effect — the service is still running the old build. {detail}</div>"
+        detail = " | ".join(restart_failures)
+        status_html += f"<div id='restartFailBanner' class='status danger'>Restart/update did not take effect — the service is still running the old build. {_h(detail)}</div>"
     L = labels.get_labels()
     ident = identity.snapshot()
 
@@ -2244,7 +2260,7 @@ def settings_page():
         <form method="post" action="/settings/update">
           <div class="fieldRow">
             <label class="muted" style="min-width:110px;">Name</label>
-            <input type="text" name="node_label" value="{ident['label']}" placeholder="Kitchen Inventory">
+            <input type="text" name="node_label" value="{_h(ident['label'])}" placeholder="Kitchen Inventory">
           </div>
           <div class="fieldRow" style="margin-top:10px;">
             <label class="muted" style="min-width:110px;">Theme</label>
@@ -2252,29 +2268,29 @@ def settings_page():
           </div>
           <div class="row"><button class="btn btn-wide" type="submit">Save</button></div>
         </form>
-        <div class="muted" style="margin-top:8px;">Node ID: <span class="mono">{ident['id']}</span></div>
+        <div class="muted" style="margin-top:8px;">Node ID: <span class="mono">{_h(ident['id'])}</span></div>
       </div>
 
       <div class="card">
         <h2>Advertised Address</h2>
-        <div class="muted">The IP this node broadcasts to the launcher (used to build its tile link). Auto-detected: <b>{mdns_advertise.detected_lan_ip()}</b> &mdash; usually the LAN, which isn't reachable if you're opening the launcher over a VPN like Tailscale from off that LAN.</div>
+        <div class="muted">The IP this node broadcasts to the launcher (used to build its tile link). Auto-detected: <b>{_h(mdns_advertise.detected_lan_ip())}</b> &mdash; usually the LAN, which isn't reachable if you're opening the launcher over a VPN like Tailscale from off that LAN.</div>
         <form method="post" action="/settings/update">
           <div class="fieldRow" style="margin-top:10px;">
             <label class="muted" style="min-width:110px;">Manual override</label>
-            <input type="text" name="advertise_ip" value="{ident['advertise_ip_override']}" placeholder="100.x.x.x (Tailscale IP)">
+            <input type="text" name="advertise_ip" value="{_h(ident['advertise_ip_override'])}" placeholder="100.x.x.x (Tailscale IP)">
           </div>
           <div class="row"><button class="btn btn-wide" type="submit">Save</button></div>
         </form>
-        <div class="muted" style="margin-top:8px;">Currently broadcasting: <b>{ident['advertised_ip']}</b>. Leave blank to auto-detect.</div>
+        <div class="muted" style="margin-top:8px;">Currently broadcasting: <b>{_h(ident['advertised_ip'])}</b>. Leave blank to auto-detect.</div>
       </div>
 
       <div class="card">
         <h2>Launcher</h2>
-        <div class="muted">Auto-discovered via mDNS: <b>{ident['launcher_url'] or 'not found yet'}</b></div>
+        <div class="muted">Auto-discovered via mDNS: <b>{_h(ident['launcher_url'] or 'not found yet')}</b></div>
         <form method="post" action="/settings/update">
           <div class="fieldRow" style="margin-top:10px;">
             <label class="muted" style="min-width:110px;">Manual override</label>
-            <input type="text" name="launcher_url" value="{labels.get_launcher_url()}" placeholder="http://launcher.local">
+            <input type="text" name="launcher_url" value="{_h(labels.get_launcher_url())}" placeholder="http://launcher.local">
           </div>
           <div class="row"><button class="btn btn-wide" type="submit">Save</button></div>
         </form>
@@ -2287,11 +2303,11 @@ def settings_page():
         <form method="post" action="/settings/labels">
           <div class="fieldRow" style="margin-top:10px;">
             <label class="muted" style="min-width:180px;">Grocery List</label>
-            <input type="text" name="grocery_list" value="{L['grocery_list']}">
+            <input type="text" name="grocery_list" value="{_h(L['grocery_list'])}">
           </div>
           <div class="fieldRow" style="margin-top:10px;">
             <label class="muted" style="min-width:180px;">Grocery &amp; Low Stock</label>
-            <input type="text" name="grocery_low_stock" value="{L['grocery_low_stock']}">
+            <input type="text" name="grocery_low_stock" value="{_h(L['grocery_low_stock'])}">
           </div>
           <div class="row"><button class="btn btn-wide" type="submit">Save Labels</button></div>
         </form>
@@ -2324,7 +2340,7 @@ def settings_page():
 
       <div class="card">
         <h2>Device</h2>
-        <div class="muted">Build: <span class="mono">{_get_git_build()}</span></div>
+        <div class="muted">Build: <span class="mono">{_h(_get_git_build())}</span></div>
         <div class="muted" id="updateStatus" style="margin-top:4px;">Checking for updates&hellip;</div>
         <div class="btnRow" style="margin-top:12px;">
           <form class="inline" method="post" action="/system/restart" onsubmit="return confirm('Restart the StockHive service on this device?');">
@@ -2372,11 +2388,11 @@ def system_restart():
 def system_update():
     ok, detail = common_update.pull_latest(REPO_DIR, GIT_BIN)
     if not ok:
-        return redirect(f"/settings?msgtype=danger&msg=Update%20failed%3A%20{quote(detail[:300])}")
+        return redirect(f"/settings?msgtype=danger&msg=Update%20failed%3A%20{_u(detail[:300])}")
 
     ok, detail = common_update.pip_install_requirements(VENV_PIP, os.path.join(BASE_DIR, "requirements.txt"))
     if not ok:
-        return redirect(f"/settings?msgtype=danger&msg=Dependency%20install%20failed%3A%20{quote(detail[:300])}")
+        return redirect(f"/settings?msgtype=danger&msg=Dependency%20install%20failed%3A%20{_u(detail[:300])}")
 
     # Refresh the cached "update available" check immediately so /api/version
     # reflects the new build right away instead of the stale pre-pull answer
@@ -2436,7 +2452,7 @@ def settings_update():
             try:
                 socket.inet_aton(advertise_ip)
             except OSError:
-                return redirect(f"/settings?msgtype=danger&msg=%22{advertise_ip}%22%20is%20not%20a%20valid%20IPv4%20address")
+                return redirect(f"/settings?msgtype=danger&msg=%22{_u(advertise_ip)}%22%20is%20not%20a%20valid%20IPv4%20address")
 
     if node_label is not None or theme is not None or advertise_ip is not None:
         identity.update_identity(label=node_label, theme=theme, advertise_ip=advertise_ip)
@@ -2465,14 +2481,14 @@ def locations_add():
     hs = True if has_shelves == "1" else False
 
     add_location(name, hs)
-    return redirect(f"/tools?msgtype=ok&msg=Added%20location%20{name.replace(' ', '%20')}")
+    return redirect(f"/tools?msgtype=ok&msg=Added%20location%20{_u(name)}")
 
 
 @app.route("/locations-delete", methods=["POST"])
 def locations_delete():
     name = (request.form.get("name", "") or "").strip()
     delete_location(name)
-    return redirect(f"/tools?msgtype=danger&msg=Deleted%20location%20{name.replace(' ', '%20')}")
+    return redirect(f"/tools?msgtype=danger&msg=Deleted%20location%20{_u(name)}")
 
 
 @app.route("/backup")
@@ -2626,7 +2642,7 @@ def restore_db():
         return redirect("/tools?msgtype=danger&msg=Restore%20failed")
 
     msg = "Restore complete" if is_zip else "Restore complete (older backup format has no photos to restore)"
-    return redirect(f"/tools?msgtype=ok&msg={quote(msg)}")
+    return redirect(f"/tools?msgtype=ok&msg={_u(msg)}")
 
 
 # ============================================================
@@ -2657,11 +2673,11 @@ def debug_events():
         dclass = "qty-low" if int(delta) > 0 else ("qty-zero" if int(delta) < 0 else "muted")
         rows += f"""
         <tr>
-          <td class="mono">{created_at}</td>
-          <td class="mono">{barcode}</td>
-          <td>{etype}</td>
+          <td class="mono">{_h(created_at)}</td>
+          <td class="mono">{_h(barcode)}</td>
+          <td>{_h(etype)}</td>
           <td><span class="{dclass}">{delta}</span></td>
-          <td class="muted">{source}</td>
+          <td class="muted">{_h(source)}</td>
         </tr>
         """
 
@@ -2711,7 +2727,7 @@ def share_grocery():
         {_styles()}
         <div class="wrap"><div class="container">
           <header>
-            <div><h1>Send {L['grocery_list']} to Phone</h1><div class="sub">QR code</div></div>
+            <div><h1>Send {_h(L['grocery_list'])} to Phone</h1><div class="sub">QR code</div></div>
             <a class="btn" href="/grocery-list">Back</a>
           </header>
 
@@ -2732,7 +2748,7 @@ pip install qrcode[pil]</pre>
     {_styles()}
     <div class="wrap"><div class="container">
       <header>
-        <div><h1>Send {L['grocery_list']} to Phone</h1><div class="sub">Scan this with your phone camera</div></div>
+        <div><h1>Send {_h(L['grocery_list'])} to Phone</h1><div class="sub">Scan this with your phone camera</div></div>
         <a class="btn" href="/grocery-list">Back</a>
       </header>
 
@@ -2744,7 +2760,7 @@ pip install qrcode[pil]</pre>
         <div class="row"></div>
 
         <div class="muted">If QR doesn't work, open this link on your phone:</div>
-        <div class="chip" style="user-select:all; display:inline-block; margin-top:10px;">{share_url}</div>
+        <div class="chip" style="user-select:all; display:inline-block; margin-top:10px;">{_h(share_url)}</div>
       </div>
     </div></div>
     """
@@ -2760,7 +2776,7 @@ def export_grocery_txt():
     {_styles()}
     <div class="wrap"><div class="container">
       <header>
-        <div><h1>Export: {L['grocery_list']}</h1><div class="sub">Plain text view</div></div>
+        <div><h1>Export: {_h(L['grocery_list'])}</h1><div class="sub">Plain text view</div></div>
         <div class="fieldRow">
           <a class="btn" href="/">Home</a>
           <a class="btn" href="/grocery-list">Back</a>
@@ -2769,7 +2785,7 @@ def export_grocery_txt():
       </header>
 
       <div class="card">
-        <pre style="white-space:pre-wrap;">{content}</pre>
+        <pre style="white-space:pre-wrap;">{_h(content)}</pre>
       </div>
     </div></div>
     """
@@ -2831,7 +2847,7 @@ def export_inventory_txt():
       </header>
 
       <div class="card">
-        <pre class="mono" style="white-space:pre; overflow-x:auto;">{content}</pre>
+        <pre class="mono" style="white-space:pre; overflow-x:auto;">{_h(content)}</pre>
       </div>
     </div></div>
     """
@@ -2911,7 +2927,7 @@ def export_events_txt():
       </header>
 
       <div class="card">
-        <pre style="white-space:pre-wrap;" class="mono">{content}</pre>
+        <pre style="white-space:pre-wrap;" class="mono">{_h(content)}</pre>
       </div>
     </div></div>
     """
@@ -2953,8 +2969,8 @@ def print_grocery():
     for row in items:
         barcode, name = row[0], row[1]
         aisle = aisle_map.get(barcode)
-        aisle_html = f" <span class='chip'>{aisle}</span>" if aisle else ""
-        rows += f"<li style='margin:10px 0;font-size:20px;'>{name}{aisle_html}</li>"
+        aisle_html = f" <span class='chip'>{_h(aisle)}</span>" if aisle else ""
+        rows += f"<li style='margin:10px 0;font-size:20px;'>{_h(name)}{aisle_html}</li>"
     if not rows:
         rows = "<li style='margin:10px 0;font-size:20px;'>(Empty)</li>"
 
@@ -2962,7 +2978,7 @@ def print_grocery():
     return f"""
     {_styles()}
     <div class="wrap"><div class="container">
-      <h1 style="margin-bottom:8px;">{labels.get_labels()['grocery_list']}</h1>
+      <h1 style="margin-bottom:8px;">{_h(labels.get_labels()['grocery_list'])}</h1>
       <div class="sub" style="margin-bottom:20px;">Print this page or save as PDF.</div>
       <div class="card">
         <ul style="padding-left:22px;">
@@ -2980,11 +2996,11 @@ def print_inventory():
     for barcode, name, location, qty, low, expiration_date in items:
         rows += f"""
           <tr>
-            <td>{name}</td>
-            <td>{location}</td>
+            <td>{_h(name)}</td>
+            <td>{_h(location)}</td>
             <td><b>{qty}</b></td>
             <td class="muted">{low if low else 0}</td>
-            <td class="muted">{barcode}</td>
+            <td class="muted">{_h(barcode)}</td>
           </tr>
         """
     if not rows:
