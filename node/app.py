@@ -326,23 +326,54 @@ def _get_base_url():
 # ------------------------------------------------------------
 # SUBSECTION: Styles
 # ------------------------------------------------------------
+# Every theme has the same colour keys, plus:
+#   name   - label shown in the Settings dropdown (dict order = dropdown order)
+#   scheme - "light"/"dark": native control colours + date-picker icon filter
+# Optional overrides (fall back to _THEME_DEFAULTS when absent):
+#   ok/warn/danger - status colours (banners, qty low/zero, expiry badges,
+#                    Recent Changes +/-N, Undo bar). Light-background themes
+#                    need darker ones; the defaults are too pale on white.
+#   hoverBorder    - button hover border.
+# Status colours are checked at >= 4.5:1 against both bg (where banners sit)
+# and panel (cards).
+_THEME_DEFAULTS = {"ok": "#39d98a", "warn": "#f7c948", "danger": "#ff4d4d", "hoverBorder": "#39425a"}
+
 _KITCHEN_THEMES = {
-    "dark":  {"bg":"#0f1115","panel":"#151922","panel2":"#111520","text":"#e7e9ee","muted":"#a8b0c2","border":"#2a3142","btn":"#1b2231","btnHover":"#232c3f","input":"#0f1420","shadow":"rgba(0,0,0,0.35)"},
-    "light": {"bg":"#f0f2f5","panel":"#ffffff","panel2":"#f7f9fc","text":"#111827","muted":"#6b7280","border":"#d1d5db","btn":"#e5e7eb","btnHover":"#d1d5db","input":"#f9fafb","shadow":"rgba(0,0,0,.12)"},
-    "dim":   {"bg":"#1e2433","panel":"#252d3d","panel2":"#202840","text":"#cdd5e0","muted":"#7d8ea8","border":"#334155","btn":"#2a3347","btnHover":"#303d54","input":"#181f2d","shadow":"rgba(0,0,0,.35)"},
+    "dark":  {"name":"Dark", "scheme":"dark", "bg":"#0f1115","panel":"#151922","panel2":"#111520","text":"#e7e9ee","muted":"#a8b0c2","border":"#2a3142","btn":"#1b2231","btnHover":"#232c3f","input":"#0f1420","shadow":"rgba(0,0,0,0.35)"},
+    "dim":   {"name":"Dim", "scheme":"dark", "bg":"#1e2433","panel":"#252d3d","panel2":"#202840","text":"#cdd5e0","muted":"#7d8ea8","border":"#334155","btn":"#2a3347","btnHover":"#303d54","input":"#181f2d","shadow":"rgba(0,0,0,.35)",
+              "danger":"#ff6b6b"},
+    "slate": {"name":"Slate", "scheme":"dark", "bg":"#202226","panel":"#292c31","panel2":"#25282c","text":"#dde1e6","muted":"#a3a9b2","border":"#3b4047","btn":"#32363c","btnHover":"#3c4148","input":"#1b1d20","shadow":"rgba(0,0,0,0.4)",
+              "danger":"#ff6b6b"},
+    "ocean": {"name":"Ocean", "scheme":"dark", "bg":"#0a1322","panel":"#0f1c30","panel2":"#0c172a","text":"#e2ecf8","muted":"#9fb5d1","border":"#22395c","btn":"#15263f","btnHover":"#1c3150","input":"#08101d","shadow":"rgba(0,0,0,0.4)"},
+    "forest": {"name":"Forest", "scheme":"dark", "bg":"#0d1611","panel":"#14211a","panel2":"#101b15","text":"#e3efe6","muted":"#9fbaa8","border":"#27402f","btn":"#1b2c22","btnHover":"#233a2c","input":"#0b130e","shadow":"rgba(0,0,0,0.4)"},
+    "ember": {"name":"Ember", "scheme":"dark", "bg":"#16100c","panel":"#201813","panel2":"#1b140f","text":"#f2e7dd","muted":"#c6ab95","border":"#3f2d21","btn":"#2b2018","btnHover":"#37291e","input":"#120d09","shadow":"rgba(0,0,0,0.4)"},
+    "high_contrast": {"name":"High Contrast", "scheme":"dark", "bg":"#050505","panel":"#0d0d0d","panel2":"#0a0a0a","text":"#ffffff","muted":"#e6e6e6","border":"#d0d0d0","btn":"#1a1a1a","btnHover":"#2e2e2e","input":"#000000","shadow":"rgba(0,0,0,0.4)",
+              "ok":"#4dff88","warn":"#ffd60a","danger":"#ff6b6b","hoverBorder":"#ffffff"},
+    "light": {"name":"Light", "scheme":"light", "bg":"#f0f2f5","panel":"#ffffff","panel2":"#f7f9fc","text":"#111827","muted":"#6b7280","border":"#d1d5db","btn":"#e5e7eb","btnHover":"#d1d5db","input":"#f9fafb","shadow":"rgba(0,0,0,.12)",
+              "ok":"#137a3a","warn":"#a15c07","danger":"#c81e1e"},
+    "sepia": {"name":"Sepia", "scheme":"light", "bg":"#f4ecd8","panel":"#fbf6e9","panel2":"#f6efdd","text":"#3b2f22","muted":"#6b5a46","border":"#d9c8a6","btn":"#ece0c4","btnHover":"#e3d4b4","input":"#fffaf0","shadow":"rgba(80,60,30,.15)",
+              "ok":"#226b30","warn":"#8a5d00","danger":"#b3261e","hoverBorder":"#bfa77c"},
 }
 
+DEFAULT_THEME_KEY = "dark"
+
+
+def _valid_theme_key(key) -> str:
+    """Only keys that exist in _KITCHEN_THEMES; anything else -> dark."""
+    return key if key in _KITCHEN_THEMES else DEFAULT_THEME_KEY
+
 def _get_kitchen_theme():
-    return _KITCHEN_THEMES.get(labels.get_theme(), _KITCHEN_THEMES["dark"])
+    return _KITCHEN_THEMES[_valid_theme_key(labels.get_theme())]
 
 def _styles():
     t = _get_kitchen_theme()
-    color_scheme = "light" if labels.get_theme() == "light" else "dark"
+    color_scheme = t["scheme"]
+    tv = {k: t.get(k, v) for k, v in _THEME_DEFAULTS.items()}
     root_block = (
         f"--bg:{t['bg']};--panel:{t['panel']};--panel2:{t['panel2']};"
         f"--text:{t['text']};--muted:{t['muted']};--border:{t['border']};"
-        f"--danger:#ff4d4d;--ok:#39d98a;--warn:#f7c948;"
-        f"--btn:{t['btn']};--btnHover:{t['btnHover']};--input:{t['input']};"
+        f"--danger:{tv['danger']};--ok:{tv['ok']};--warn:{tv['warn']};"
+        f"--btn:{t['btn']};--btnHover:{t['btnHover']};--btnHoverBorder:{tv['hoverBorder']};--input:{t['input']};"
         f"--shadow:{t['shadow']};"
         f"color-scheme:{color_scheme};"
     )
@@ -372,7 +403,7 @@ def _styles():
             padding:12px 14px; border-radius:14px; font-size:16px; cursor:pointer; text-decoration:none;
             display:inline-flex; align-items:center; justify-content:center; gap:8px;
             transition:transform .05s ease, background .15s ease, border-color .15s ease; }
-      .btn:hover{ background:var(--btnHover); border-color:#39425a; } .btn:active{ transform: translateY(1px); }
+      .btn:hover{ background:var(--btnHover); border-color:var(--btnHoverBorder); } .btn:active{ transform: translateY(1px); }
       .btn-wide{ width:220px; max-width:100%; } .zone-btn{ min-width:150px; }
       .btn-danger{ border-color: rgba(255,77,77,0.35); background: rgba(255,77,77,0.10); }
       .btn-danger:hover{ background: rgba(255,77,77,0.16); border-color: rgba(255,77,77,0.55); }
@@ -2135,9 +2166,10 @@ def settings_page():
     L = labels.get_labels()
     ident = identity.snapshot()
 
+    current_theme = _valid_theme_key(ident["theme"])
     theme_options = "".join(
-        f'<option value="{key}" {"selected" if key == ident["theme"] else ""}>{key.capitalize()}</option>'
-        for key in _KITCHEN_THEMES
+        f'<option value="{key}" {"selected" if key == current_theme else ""}>{t["name"]}</option>'
+        for key, t in _KITCHEN_THEMES.items()
     )
 
     return f"""
@@ -2291,6 +2323,8 @@ def system_shutdown():
 def settings_update():
     node_label = request.form.get("node_label")
     theme = request.form.get("theme")
+    if theme is not None:
+        theme = _valid_theme_key(theme.strip())
     launcher_url = request.form.get("launcher_url")
     advertise_ip = request.form.get("advertise_ip")
 

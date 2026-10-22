@@ -202,7 +202,19 @@ body{
 <script>
 let allNodes = [];
 
-const THEME_ACCENTS = { dark: "#60a5fa", light: "#f59e0b", dim: "#a78bfa" };
+// One distinct accent per node theme (keys match node/app.py _KITCHEN_THEMES),
+// so nodes are easy to tell apart on the tile grid.
+const THEME_ACCENTS = {
+  dark: "#60a5fa",          // blue
+  light: "#f59e0b",         // amber
+  dim: "#a78bfa",           // violet
+  slate: "#a3e635",         // lime (not grey, so it never reads as an offline tile)
+  ocean: "#22d3ee",         // cyan
+  forest: "#34d399",        // green
+  ember: "#f05a3c",         // red-orange
+  high_contrast: "#ffffff", // white
+  sepia: "#d4a373",         // tan
+};
 
 function esc(s){
   return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
