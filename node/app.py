@@ -3085,8 +3085,9 @@ def export_inventory_txt():
     QTY_W = 3
 
     lines = []
-    lines.append("StockPi Inventory (Readable Export)")
-    lines.append("=================================")
+    title = f"{labels.get_node_label()}: Inventory (Readable Export)"
+    lines.append(title)
+    lines.append("=" * len(title))
     lines.append("")
     header = f"{'ITEM':<{NAME_W}}  {'LOCATION':<{LOC_W}}  {'QTY':>{QTY_W}}  {'LOW':>3}  BARCODE"
     lines.append(header)
@@ -3135,8 +3136,9 @@ def export_inventory_raw():
     QTY_W = 3
 
     lines = []
-    lines.append("StockPi Inventory (Readable Export)")
-    lines.append("=================================")
+    title = f"{labels.get_node_label()}: Inventory (Readable Export)"
+    lines.append(title)
+    lines.append("=" * len(title))
     lines.append("")
     header = f"{'ITEM':<{NAME_W}}  {'LOCATION':<{LOC_W}}  {'QTY':>{QTY_W}}  {'LOW':>3}  BARCODE"
     lines.append(header)
@@ -3173,8 +3175,9 @@ def export_events_txt():
     events = get_event_log(limit_i)
 
     lines = []
-    lines.append("StockPi Event Log (Debug Export)")
-    lines.append("================================")
+    title = f"{labels.get_node_label()}: Event Log (Debug Export)"
+    lines.append(title)
+    lines.append("=" * len(title))
     lines.append("")
     lines.append("time | barcode | type | delta | source")
     lines.append("--------------------------------------")
@@ -3217,8 +3220,9 @@ def export_events_raw():
     events = get_event_log(limit_i)
 
     lines = []
-    lines.append("StockPi Event Log (Debug Export)")
-    lines.append("================================")
+    title = f"{labels.get_node_label()}: Event Log (Debug Export)"
+    lines.append(title)
+    lines.append("=" * len(title))
     lines.append("")
     lines.append("time | barcode | type | delta | source")
     lines.append("--------------------------------------")
@@ -3278,8 +3282,8 @@ def print_inventory():
     return f"""
     {_styles()}
     <div class="wrap"><div class="container">
-      <h1 style="margin-bottom:8px;">StockPi Inventory</h1>
-      <div class="sub" style="margin-bottom:14px;">Print this page or Save as PDF on your phone.</div>
+      <h1 style="margin-bottom:8px;">{_h(labels.get_node_label())}</h1>
+      <div class="sub" style="margin-bottom:14px;">Inventory: print this page or Save as PDF on your phone.</div>
       <div class="card">
         <table>
           <tr>

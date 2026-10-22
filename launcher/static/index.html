@@ -466,7 +466,7 @@ function renderTodayGlance(d){
 function renderGrid(nodes){
   const grid = document.getElementById("grid");
   if(!nodes.length){
-    grid.innerHTML = '<div class="empty">No StockPi instances discovered yet. Make sure a node is powered on and on the same network.</div>';
+    grid.innerHTML = '<div class="empty">No StockHive nodes discovered yet. Make sure a node is powered on and on the same network.</div>';
     return;
   }
   grid.innerHTML = nodes.map(n => {

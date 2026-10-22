@@ -90,11 +90,20 @@ if $INSTALL_NODE; then
   echo -e "${BOLD}--- Node configuration ---${NC}"
   read -rp "Instance name (default: Kitchen Inventory): " NODE_LABEL
   NODE_LABEL="${NODE_LABEL:-Kitchen Inventory}"
-  echo "Theme: 1) dark  2) light  3) dim"
-  read -rp "Choose a theme [1-3, default 1]: " THEME_CHOICE
+  echo "Theme:"
+  echo "  1) Dark     2) Dim      3) Slate"
+  echo "  4) Ocean    5) Forest   6) Ember"
+  echo "  7) High Contrast        8) Light    9) Sepia"
+  read -rp "Choose a theme [1-9, default 1 = Dark]: " THEME_CHOICE
   case "$THEME_CHOICE" in
-    2) NODE_THEME="light" ;;
-    3) NODE_THEME="dim" ;;
+    2) NODE_THEME="dim" ;;
+    3) NODE_THEME="slate" ;;
+    4) NODE_THEME="ocean" ;;
+    5) NODE_THEME="forest" ;;
+    6) NODE_THEME="ember" ;;
+    7) NODE_THEME="high_contrast" ;;
+    8) NODE_THEME="light" ;;
+    9) NODE_THEME="sepia" ;;
     *) NODE_THEME="dark" ;;
   esac
 fi
@@ -125,6 +134,14 @@ install_node() {
   local NODE_DIR="$REPO_DIR/node"
   echo ""
   echo -e "${BOLD}--- Setting up node (port $NODE_PORT) ---${NC}"
+
+  # Bold font for printed labels (label_printer.py falls back to
+  # Pillow's built-in font without it).
+  if apt-get install -y fonts-dejavu-core > /dev/null 2>&1; then
+    success "Label font installed."
+  else
+    warn "Couldn't install fonts-dejavu-core — labels will use a plainer font."
+  fi
 
   local VENV_DIR="$NODE_DIR/venv"
   if [[ -d "$VENV_DIR" ]]; then

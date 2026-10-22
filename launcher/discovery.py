@@ -66,7 +66,7 @@ class _NodeListener(ServiceListener):
         node_id = props.get("id")
         if not node_id:
             return
-        label = props.get("label") or "StockPi Node"
+        label = props.get("label") or "StockHive Node"
         theme = props.get("theme") or "dark"
         ip = socket.inet_ntoa(info.addresses[0])
         nodes_db.upsert_online(node_id, label, theme, ip, info.port)
