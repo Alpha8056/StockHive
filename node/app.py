@@ -17,6 +17,7 @@ from html import escape
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from flask import Flask, request, redirect, send_file, Response, url_for, render_template, jsonify
+from markupsafe import Markup
 
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.exceptions import RequestEntityTooLarge
@@ -914,6 +915,10 @@ def resolve_barcode_page():
     items = get_inventory()
     return render_template(
         "resolve_barcode.html",
+        # Same theme-aware CSS every other page uses, so this page follows
+        # the node's theme instead of a hard-coded dark copy. Markup so
+        # Jinja doesn't escape the <style> block.
+        styles=Markup(_styles()),
         barcode=barcode,
         items=items,
         error=error,
