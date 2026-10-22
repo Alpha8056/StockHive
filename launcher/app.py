@@ -68,9 +68,18 @@ def _safe_get_weather_summary():
     try:
         hourly = weather_client.get_forecast_hourly()
         props = hourly.get("properties", {})
-        periods = props.get("periods", []) or []
-        if not periods:
+        all_periods = props.get("periods", []) or []
+        if not all_periods:
             raise ValueError("No hourly periods returned")
+        periods = weather_client.current_and_future_periods(all_periods)
+        if not periods:
+            # Every period has already ended — data is too stale to show.
+            return {
+                "ok": False, "stale": True,
+                "location": weather_client.get_weather_zip(),
+                "temp": "—", "condition": "—", "feels": "—", "hi": "—", "lo": "—",
+                "precip": "—", "updated": props.get("updated") or "—",
+            }
 
         now = periods[0]
         temp_f = now.get("temperature")
@@ -110,7 +119,7 @@ def _safe_hourly_rows(limit: int = 12):
     try:
         hourly = weather_client.get_forecast_hourly()
         periods = hourly.get("properties", {}).get("periods", []) or []
-        for p in periods[:limit]:
+        for p in weather_client.current_and_future_periods(periods)[:limit]:
             start = str(p.get("startTime", ""))
             time_short = start[11:16] if len(start) >= 16 else start
 

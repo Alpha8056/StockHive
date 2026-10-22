@@ -424,6 +424,8 @@ function renderTodayGlance(d){
       <div class="glanceSub">High/Low: <b>${esc(wx.hi)}</b>/<b>${esc(wx.lo)}</b> &bull; Precip: <b>${esc(wx.precip)}</b></div>`;
   } else if(d && d.needs_zip){
     html += `<div class="glanceCond">Set a ZIP in Settings</div>`;
+  } else if(wx.stale){
+    html += `<div class="glanceCond">Forecast updating…</div>`;
   } else {
     html += `<div class="glanceCond">Weather unavailable right now.</div>`;
   }
@@ -488,7 +490,10 @@ function buildWeather(d){
   if(d.needs_zip)
     return html + `<div class="wxCard"><div class="wxTitle">Set a ZIP in Settings</div></div>`;
   for(const section of (d.weather_sections || [])){
-    if(section === "hourly" && d.hourly && d.hourly.length){
+    if(section === "hourly" && d.weather && d.weather.stale){
+      html += `<div class="wxCard"><div class="wxTitle">Hourly Forecast</div><div class="wxSub">Forecast updating…</div></div>`;
+    }
+    else if(section === "hourly" && d.hourly && d.hourly.length){
       html += `<div class="wxCard"><div class="wxTitle">Hourly Forecast</div>
         <div class="wxTableWrap"><table class="wxTable">
           <thead><tr><th>Time</th><th>Temp</th><th>Condition</th><th>Precip</th><th>Wind</th></tr></thead>

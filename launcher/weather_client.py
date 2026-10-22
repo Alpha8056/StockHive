@@ -4,7 +4,8 @@ import json
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 import pgeocode
@@ -143,6 +144,27 @@ def get_forecast_hourly() -> Dict[str, Any]:
         raise ValueError("No forecastHourly URL found in /points response")
     lat, lon = resolve_zip_to_latlon()
     return _get_json(forecast_hourly_url, ttl_seconds=5 * 60, cache_key=f"hourly_{lat:.4f}_{lon:.4f}")
+
+
+def current_and_future_periods(periods: List[Dict[str, Any]], now: Optional[datetime] = None) -> List[Dict[str, Any]]:
+    """
+    Drop forecast periods that have already ended. NWS hourly data is often
+    generated hours earlier, so the first periods can be in the past. The
+    first period returned is the one covering `now` (or the next one up).
+    Periods with missing/unparseable times are dropped too.
+    """
+    now = now or datetime.now(timezone.utc)
+    kept = []
+    for p in periods or []:
+        try:
+            end = datetime.fromisoformat(str(p.get("endTime", "")))
+        except ValueError:
+            continue
+        if end.tzinfo is None:
+            continue
+        if end > now:
+            kept.append(p)
+    return kept
 
 
 def get_hourly_fetched_at() -> Optional[float]:
