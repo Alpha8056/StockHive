@@ -1,0 +1,19 @@
+# StockHive nightly backup config.
+# install.sh copies this to /etc/stockhive-backup.conf (outside the repo)
+# the first time; edit that copy, not this file.
+# Plain KEY=VALUE lines. It is read by the script, never run as shell.
+
+# Launcher address (the page that lists your nodes)
+LAUNCHER_URL=http://launcher.local
+
+# Where backups go: one sub-folder per node
+BACKUP_DIR=/srv/stockhive-backups
+
+# Days of backups to keep per node (the newest is always kept)
+KEEP_DAYS=14
+
+# Daily run time, 24-hour HH:MM. After changing it, run install.sh again.
+RUN_AT=02:30
+
+# Optional: also append the log here (the systemd journal always has it)
+LOG_FILE=

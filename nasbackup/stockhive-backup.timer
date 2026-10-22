@@ -1,0 +1,11 @@
+[Unit]
+Description=Run StockHive node backups daily
+
+[Timer]
+OnCalendar=*-*-* __RUN_AT__:00
+# Run at boot if the machine was off at the scheduled time
+Persistent=true
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

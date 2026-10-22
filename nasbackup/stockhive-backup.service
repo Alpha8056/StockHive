@@ -1,0 +1,12 @@
+[Unit]
+Description=StockHive nightly node backups
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=__USER__
+ExecStart=/usr/bin/python3 __SCRIPT__ --config __CONFIG__
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=true
