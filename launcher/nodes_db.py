@@ -1,8 +1,8 @@
 # ============================================================
 # FILE: nodes_db.py
 # SQLite store of every StockPi node the launcher has discovered
-# over mDNS, plus online/offline state and the permanent-delete
-# blocklist for Settings > Manage Nodes. Also holds the
+# over mDNS, plus online/offline state and the hide/restore flag
+# for Settings > Manage Nodes. Also holds the
 # Settings > Saved Dates entries shown on carousel page 3.
 # ============================================================
 
@@ -122,10 +122,10 @@ def is_deleted(node_id: str) -> bool:
 
 
 def delete_node(node_id: str) -> None:
-    """Permanently hides a node's tile. If it's already known, flag it;
-    otherwise insert a deleted placeholder so it stays hidden even if it
-    hasn't broadcast yet (defensive; upsert_online always runs first in
-    practice)."""
+    """Hides a node's tile until restore_node() or purge_node(). It stays
+    hidden across mDNS rebroadcasts since upsert_online never touches
+    is_deleted. If the node isn't known yet, insert a hidden placeholder
+    (defensive; upsert_online always runs first in practice)."""
     conn = _connect()
     try:
         cur = conn.execute("UPDATE nodes SET is_deleted = 1 WHERE id = ?;", (node_id,))
@@ -135,6 +135,36 @@ def delete_node(node_id: str) -> None:
                 VALUES (?, '', 'dark', 0, 1);
             """, (node_id,))
         conn.commit()
+    finally:
+        conn.close()
+
+
+def restore_node(node_id: str) -> None:
+    """Un-hides a node removed with delete_node()."""
+    conn = _connect()
+    try:
+        conn.execute("UPDATE nodes SET is_deleted = 0 WHERE id = ?;", (node_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def purge_node(node_id: str) -> None:
+    """Deletes a node's row entirely. If it broadcasts again, discovery
+    adds it back as a new, visible node."""
+    conn = _connect()
+    try:
+        conn.execute("DELETE FROM nodes WHERE id = ?;", (node_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_deleted_nodes():
+    conn = _connect()
+    try:
+        rows = conn.execute("SELECT * FROM nodes WHERE is_deleted = 1 ORDER BY label;").fetchall()
+        return [dict(r) for r in rows]
     finally:
         conn.close()
 

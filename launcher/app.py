@@ -744,8 +744,8 @@ SETTINGS_HTML = """
           <td><button class="btn" type="button" data-update-node="{{ n.id }}" {{ '' if n.is_online else 'disabled' }}>Update</button></td>
           <td>{% if n.url %}<a class="btn" href="{{ n.url }}/settings">Settings</a>{% endif %}</td>
           <td>
-            <form method="post" action="/settings/nodes/{{ n.id }}/delete" onsubmit="return confirm('Permanently remove this node from the launcher?');">
-              <button class="btn btnDanger" type="submit">Delete</button>
+            <form method="post" action="/settings/nodes/{{ n.id | urlencode }}/delete" onsubmit="return confirm('Hide this node from the launcher? You can restore it later under Removed nodes.');">
+              <button class="btn btnDanger" type="submit">Remove</button>
             </form>
           </td>
         </tr>
@@ -754,7 +754,31 @@ SETTINGS_HTML = """
         {% endfor %}
       </tbody>
     </table>
-    <div style="color:var(--muted);font-size:13px;margin-top:8px;">Deleting a node hides its tile permanently, even if it comes back online. The launcher updates itself with its own Update button below.</div>
+    <div style="color:var(--muted);font-size:13px;margin-top:8px;">Removing a node hides its tile, even if it comes back online. Restore it or delete it forever under Removed nodes. The launcher updates itself with its own Update button below.</div>
+    {% if removed_nodes %}
+    <h3 style="margin:20px 0 8px;">Removed nodes</h3>
+    <table>
+      <thead><tr><th>Name</th><th>Last IP</th><th></th><th></th></tr></thead>
+      <tbody>
+        {% for n in removed_nodes %}
+        <tr>
+          <td>{{ n.label or n.id }}</td>
+          <td class="mono" style="color:var(--muted);">{{ n.ip or '—' }}</td>
+          <td>
+            <form method="post" action="/settings/nodes/{{ n.id | urlencode }}/restore">
+              <button class="btn" type="submit">Restore</button>
+            </form>
+          </td>
+          <td>
+            <form method="post" action="/settings/nodes/{{ n.id | urlencode }}/purge" onsubmit="return confirm('Delete this node\\'s record? If it comes back online it will reappear as a new node.');">
+              <button class="btn btnDanger" type="submit">Delete forever</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
   </div>
 
   <div class="card">
@@ -980,6 +1004,7 @@ def settings_page():
         display=_get_display_settings(),
         saved_dates=saved_dates,
         nodes=[_format_node(r) for r in nodes_db.list_nodes(include_deleted=False)],
+        removed_nodes=[_format_node(r) for r in nodes_db.list_deleted_nodes()],
         restart_error=restart_error,
     )
 
@@ -1054,7 +1079,19 @@ def settings_delete_date(date_id):
 @app.post("/settings/nodes/<node_id>/delete")
 def settings_delete_node(node_id):
     nodes_db.delete_node(node_id)
-    return redirect("/settings")
+    return redirect("/settings?msgtype=ok&msg=Node%20removed")
+
+
+@app.post("/settings/nodes/<node_id>/restore")
+def settings_restore_node(node_id):
+    nodes_db.restore_node(node_id)
+    return redirect("/settings?msgtype=ok&msg=Node%20restored")
+
+
+@app.post("/settings/nodes/<node_id>/purge")
+def settings_purge_node(node_id):
+    nodes_db.purge_node(node_id)
+    return redirect("/settings?msgtype=ok&msg=Node%20record%20deleted")
 
 
 if __name__ == "__main__":
