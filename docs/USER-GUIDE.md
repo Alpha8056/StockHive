@@ -37,7 +37,7 @@ the label printer are covered elsewhere:
 | See what I need to buy | [8. Grocery List](#8-grocery-list) |
 | Send the grocery list to my phone | [8. Grocery List](#8-grocery-list) |
 | See what's running low or about to expire | [9. Low Stock and Expiring Soon](#9-low-stock-and-expiring-soon) |
-| Rename a node, change its colours, or rename "Grocery List" | [10. Settings on a node](#10-settings-on-a-node) |
+| Rename a node, change its colors, or rename "Grocery List" | [10. Settings on a node](#10-settings-on-a-node) |
 | Find an item without knowing which node it's on | [11. The launcher](#11-the-launcher) |
 | Set the weather location or add birthdays | [11. The launcher](#11-the-launcher) |
 | Dim the kitchen screen at night | [12. The kiosk screen](#12-the-kiosk-screen) |
@@ -297,7 +297,7 @@ The launcher shows the same warnings, across all nodes, on its **Expiring Soon**
 To open it, go to **Tools**, then **Open Settings**.
 
 - **Instance:** **Name** is the node's name, shown on its tile and pages. **Theme** has
-  9 colour themes: Dark, Dim, Slate, Ocean, Forest, Ember, High Contrast, Light and Sepia.
+  9 color themes: Dark, Dim, Slate, Ocean, Forest, Ember, High Contrast, Light and Sepia.
   Tap **Save**.
 - **Page Labels:** rename the wording to suit what this node tracks. For example, change
   **Grocery List** to "Part List" for a parts node. Tap **Save Labels**.
