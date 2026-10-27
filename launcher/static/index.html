@@ -93,6 +93,14 @@ body{
   background:rgba(17,24,38,.5); color:var(--text); font-size:15px; outline:none;
 }
 #search:focus{ border-color:rgba(96,165,250,.6); box-shadow:0 0 0 3px rgba(96,165,250,.15); }
+.searchRow{ display:flex; justify-content:center; align-items:center; gap:8px; }
+/* Muted Clear button: only shown while the box has text (see onSearchInput). */
+#searchClear{
+  min-width:64px; min-height:44px; padding:0 14px; border-radius:14px; border:1px solid var(--border);
+  background:transparent; color:var(--muted); font-size:14px; font-weight:700; cursor:pointer;
+}
+#searchClear:hover, #searchClear:focus-visible{ color:var(--text); border-color:rgba(96,165,250,.6); outline:none; }
+#searchClear[hidden]{ display:none; }
 
 .grid{
   display:grid; grid-template-columns:repeat(3, 1fr); gap:18px;
@@ -204,6 +212,7 @@ body{
   <div class="searchRow">
     <input id="search" type="text" placeholder="Search instances or items…" oninput="onSearchInput()"
            onkeydown="if(event.key === 'Enter'){ event.preventDefault(); searchItems(); }">
+    <button id="searchClear" type="button" onclick="clearSearch()" hidden>Clear</button>
   </div>
 
   <div id="grid" class="grid"></div>
@@ -507,9 +516,18 @@ const ITEM_SEARCH_MIN_CHARS = 2;
 let itemSearchTimer = null;
 let itemSearchSeq = 0;
 
+function clearSearch(){
+  const box = document.getElementById("search");
+  box.value = "";
+  onSearchInput();          // shows every tile again and clears item results
+  box.focus();
+}
+
 function onSearchInput(){
   const matchedNodes = applyFilter();
-  const q = document.getElementById("search").value.trim();
+  const raw = document.getElementById("search").value;
+  document.getElementById("searchClear").hidden = raw.length === 0;
+  const q = raw.trim();
   clearTimeout(itemSearchTimer);
   if(!q){
     itemSearchSeq++;                       // drop any reply still in flight

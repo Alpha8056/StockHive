@@ -482,6 +482,12 @@ def _styles():
       .bannerLink{ all:unset; display:inline-flex; align-items:center; min-height:44px; padding:0 4px;
                    cursor:pointer; color:inherit; font:inherit; text-decoration:underline; text-underline-offset:3px; }
       .bannerLink:focus-visible{ outline:2px solid currentColor; outline-offset:2px; border-radius:6px; }
+      /* Brief highlight on the row you came back to (theme --ok tint). */
+      @keyframes returnFlash{
+        0%, 45%{ background-color:rgba(127,127,127,0.18); background-color:color-mix(in srgb, var(--ok) 22%, transparent); }
+        100%{ background-color:transparent; }
+      }
+      .returnFlash, tr.returnFlash > td{ animation:returnFlash 2.4s ease-out; }
       .chip{ display:inline-block; padding:7px 11px; border:1px solid var(--border); border-radius:999px;
              background:rgba(255,255,255,0.03); margin-left:8px; font-size:14px; }
       .muted{ color:var(--muted); font-size:14px; }
@@ -736,7 +742,7 @@ def _page_status_html():
     print_code = (request.args.get("print") or "").strip()
     actions = ""
     if edit_code:
-        actions += f"<a class='bannerLink' href='/edit?barcode={_u(edit_code)}'>Edit item</a>"
+        actions += f"<a class='bannerLink' href='{_h(_edit_url(edit_code, _here()))}'>Edit item</a>"
     if print_code:
         # POST (not a link) so a browser prefetch can never trigger a print.
         back = escape(request.full_path.rstrip("?"), quote=True)
@@ -931,7 +937,7 @@ def home():
         var el = null;
         if (focusTarget === "remove") el = document.getElementById("remove_barcode");
         else el = document.getElementById("scan_barcode");
-        if (el) {{ el.focus(); el.select(); }}
+        if (el) {{ el.focus({{ preventScroll: true }}); el.select(); }}
       }};
     </script>
     """
@@ -939,7 +945,7 @@ def home():
     page_loaded_at = time.strftime("%Y-%m-%d %H:%M:%S")
     node_label = labels.get_node_label()
     return f"""
-    {_styles()}{_auto_hide_banner_js()}{focus_js}
+    {_styles()}{_auto_hide_banner_js()}{focus_js}{_return_spot_js()}
     <div class="wrap"><div class="container">
       <header>
         <div><h1>{_h(node_label)} <span style="font-size:13px;font-weight:400;opacity:0.6">v{VERSION}</span></h1><div class="sub">Fast scan, local-first, touchscreen-friendly</div></div>
@@ -1301,6 +1307,7 @@ def inventory_page():
         sel = "selected" if z == zone_filter else ""
         zone_options += f"<option value='{_h(z)}' {sel}>{_h(z)}</option>"
 
+    here = _here()
     rows = ""
     for barcode, name, location, qty, low, expiration_date in filtered:
         qty = int(qty)
@@ -1336,7 +1343,7 @@ def inventory_page():
             thumb_html = f'<span class="item-thumb item-thumb-placeholder">{_PHOTO_PLACEHOLDER_SVG}</span>'
 
         rows += f"""
-        <div class="invRow">
+        <div class="invRow" data-item="{_h(barcode)}">
           <div class="invCell-item"><div class="item-cell">{thumb_html}<span>{_h(name)}</span></div></div>
           <div class="invBody">
             <div class="invLeft">
@@ -1347,9 +1354,10 @@ def inventory_page():
               <div class="invCell-actions">
                 <form class="inline" method="post" action="/inventory-remove">
                   <input type="hidden" name="barcode" value="{_h(barcode)}">
+                  {_back_field(here)}
                   <button class="btn btn-danger">-1</button>
                 </form>
-                <a class="btn" href="/edit?barcode={_u(barcode)}">Edit</a>
+                <a class="btn" href="/edit?barcode={_u(barcode)}&back={_u(here)}">Edit</a>
               </div>
             </div>
             <div class="invQtyBlock">
@@ -1392,7 +1400,7 @@ def inventory_page():
         <h2>Search</h2>
         <form method="get" action="/inventory">
           <div class="fieldRow">
-            <input type="text" name="q" id="invSearch" placeholder="Search by name or barcode" value="{_h(request.args.get('q',''))}" autofocus>
+            <input type="text" name="q" id="invSearch" placeholder="Search by name or barcode" value="{_h(request.args.get('q',''))}">
             <select name="zone">{zone_options}</select>
             <button class="btn btn-wide" type="submit">Apply</button>
             <a class="btn" href="/inventory">Clear</a>
@@ -1406,9 +1414,11 @@ def inventory_page():
       <script>
         window.onload = function() {{
           var el = document.getElementById('invSearch');
-          if (el) {{ el.focus(); el.select(); }}
+          // preventScroll: focusing the box must not undo the return-to-spot scroll.
+          if (el) {{ el.focus({{ preventScroll: true }}); el.select(); }}
         }};
       </script>
+      {_return_spot_js()}
 
       <div class="invList">
         <div class="invHead"><div>Item</div><div>Location</div><div>Qty</div><div>Low</div><div>Expires</div><div>Actions</div></div>
@@ -1486,23 +1496,23 @@ def threshold_set():
     set_low_threshold(barcode, thr_i)
     item = get_item_by_barcode(barcode)
     name = item[1] if item else "item"
-    return redirect(f"/edit?barcode={_u(barcode)}&msgtype=ok&msg=Set%20low%20threshold%20for%20{_u(name)}")
+    return redirect(f"{_edit_url(barcode, _back_param())}&msgtype=ok&msg=Set%20low%20threshold%20for%20{_u(name)}")
 
 
 @app.route("/inventory-remove", methods=["POST"])
 def inventory_remove():
     barcode = (request.form.get("barcode", "") or "").strip()
+    back = _back_param()
     if not barcode:
-        return redirect("/inventory?msgtype=danger&msg=Barcode%20required")
+        return redirect(_return_url(back, "Barcode required", "danger"))
 
     item = get_item_by_barcode(barcode)
     if not item:
-        return redirect("/inventory?msgtype=danger&msg=Item%20not%20found")
+        return redirect(_return_url(back, "Item not found", "danger"))
 
     event_id = remove_one(barcode)
     new_qty = max(int(item[3]) - 1, 0)
-    undo_param = f"&undo={int(event_id)}" if event_id else ""
-    return redirect(f"/inventory?msgtype=danger&msg={_u(item[1])}%20-1({new_qty}){undo_param}")
+    return redirect(_return_url(back, f"{item[1]} -1({new_qty})", "danger", at=item[0], undo=event_id))
 
 
 # ============================================================
@@ -1525,6 +1535,104 @@ def _with_status(path: str, msg: str, msgtype: str) -> str:
     query = [(k, v) for k, v in parse_qsl(parts.query) if k not in ("msg", "msgtype", "undo", "print")]
     query += [("msgtype", msgtype), ("msg", msg)]
     return urlunsplit(("", "", parts.path, urlencode(query), ""))
+
+
+# ------------------------------------------------------------
+# SUBSECTION: Return to the same spot on list pages
+# List pages hand their own address (filters included) to item links
+# and row actions as `back`; whatever you do there returns to it with
+# `at=<barcode>`, and _return_spot_js() scrolls to + highlights that
+# row — or, with no `at`, restores the scroll position you left from.
+# ------------------------------------------------------------
+_ONE_OFF_PARAMS = ("msg", "msgtype", "undo", "print", "edit", "at")
+
+
+def _here() -> str:
+    """This page's path + query without one-off params (banner, undo,
+    at): the `back` value list pages hand to item links and forms."""
+    query = [(k, v) for k, v in parse_qsl(request.query_string.decode("utf-8", "replace"), keep_blank_values=True)
+             if k not in _ONE_OFF_PARAMS]
+    return request.path + ("?" + urlencode(query) if query else "")
+
+
+def _back_param(default: str = "/inventory") -> str:
+    """The validated `back` value from the query or form, else default."""
+    raw = (request.values.get("back") or "").strip()
+    return _safe_return_path(raw) if raw else default
+
+
+def _return_url(back: str, msg: str = "", msgtype: str = "ok", at: str = "", undo=None) -> str:
+    """`back` with its filters kept, plus an optional banner, Undo offer
+    and `at` (the item row to scroll to)."""
+    parts = urlsplit(_safe_return_path(back))
+    query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k not in _ONE_OFF_PARAMS]
+    if msg:
+        query += [("msgtype", msgtype), ("msg", msg)]
+    if undo:
+        query.append(("undo", str(int(undo))))
+    if at:
+        query.append(("at", at))
+    return urlunsplit(("", "", parts.path, urlencode(query), ""))
+
+
+def _edit_url(barcode: str, back: str) -> str:
+    """An item's Edit page that still knows which list to return to."""
+    return f"/edit?barcode={_u(barcode)}&back={_u(back)}"
+
+
+def _back_field(back: str) -> str:
+    return f'<input type="hidden" name="back" value="{_h(back)}">'
+
+
+def _return_spot_js() -> str:
+    """Scroll to + flash the row named by ?at= (then drop it from the
+    address), else restore this page's saved scroll position. Positions
+    are saved per page + filters, for this browser tab only."""
+    return """
+    <script>
+    (function() {
+      var ONE_OFF = ["msg", "msgtype", "undo", "print", "edit", "at"];
+      function pageKey() {
+        var p = new URLSearchParams(location.search);
+        ONE_OFF.forEach(function(k) { p.delete(k); });
+        var qs = p.toString();
+        return "stockhive-scroll:" + location.pathname + (qs ? "?" + qs : "");
+      }
+      function save() {
+        try { sessionStorage.setItem(pageKey(), String(Math.round(window.scrollY))); } catch (e) {}
+      }
+      window.addEventListener("pagehide", save);
+      document.addEventListener("submit", save, true);
+      document.addEventListener("click", function(e) {
+        if (e.target.closest && e.target.closest("a, button")) save();
+      }, true);
+
+      window.addEventListener("load", function() {
+        var params = new URLSearchParams(location.search);
+        var at = params.get("at");
+        var row = null;
+        if (at !== null) {
+          document.querySelectorAll("[data-item]").forEach(function(el) {
+            if (!row && el.getAttribute("data-item") === at) row = el;
+          });
+          params.delete("at");
+          var qs = params.toString();
+          history.replaceState(null, "", location.pathname + (qs ? "?" + qs : "") + location.hash);
+        }
+        if (row) {
+          row.scrollIntoView({ block: "center" });
+          row.classList.add("returnFlash");
+          setTimeout(function() { row.classList.remove("returnFlash"); }, 2400);
+          return;
+        }
+        try {
+          var y = sessionStorage.getItem(pageKey());
+          if (y !== null) window.scrollTo(0, parseInt(y, 10) || 0);
+        } catch (e) {}
+      });
+    })();
+    </script>
+    """
 
 
 def _undo_toast_html() -> str:
@@ -1580,18 +1688,20 @@ def undo_route():
 @app.route("/inventory-delete", methods=["POST"])
 def inventory_delete():
     barcode = (request.form.get("barcode", "") or "").strip()
+    back = _back_param()
     if not barcode:
-        return redirect("/inventory?msgtype=danger&msg=Barcode%20required")
+        return redirect(_return_url(back, "Barcode required", "danger"))
 
     item = get_item_by_barcode(barcode)
     if not item:
-        return redirect("/inventory?msgtype=danger&msg=Item%20not%20found")
+        return redirect(_return_url(back, "Item not found", "danger"))
 
     photo = get_item_photo(barcode)
     delete_item(barcode)
     if photo:
         photos.delete_photo(photo)
-    return redirect(f"/inventory?msgtype=danger&msg=Deleted%20{_u(item[1])}")
+    # No `at`: the row is gone, so the list restores your scroll spot.
+    return redirect(_return_url(back, f"Deleted {item[1]}", "danger"))
 
 
 @app.route("/edit")
@@ -1606,6 +1716,8 @@ def edit_item_page():
     photo = get_item_photo(barcode)
     aisle = get_item_aisle(barcode)
     status_html = _page_status_html()
+    back = _back_param()                 # the list page (with filters) we came from
+    edit_here = _edit_url(barcode, back)
 
     if photo:
         photo_box_html = f'<img src="/static/photos/{_h(photo)}" alt="">'
@@ -1626,6 +1738,7 @@ def edit_item_page():
           <form class="inline" method="post" action="/edit/alias-remove">
             <input type="hidden" name="barcode" value="{_h(barcode)}">
             <input type="hidden" name="alias" value="{_h(a)}">
+            {_back_field(back)}
             <button class="btn btn-danger" type="submit" title="Unlink this barcode">Remove</button>
           </form>
         </div>
@@ -1638,12 +1751,13 @@ def edit_item_page():
     <div class="wrap"><div class="container">
       <header>
         <div><h1>Edit Item</h1><div class="sub">Update name, quantity, expiration date &amp; aisle</div></div>
-        <a class="btn" href="/inventory">Back</a>
+        <a class="btn" href="{_h(_return_url(back, at=item[0]))}">Back</a>
       </header>
       {status_html}
       <div class="card">
         <form method="post" action="/edit-save" enctype="multipart/form-data">
           <input type="hidden" name="barcode" value="{_h(barcode)}">
+          {_back_field(back)}
           <div class="fieldRow" style="margin-bottom:14px;">
             <label style="color:var(--muted);font-size:14px;">Item Name</label>
           </div>
@@ -1694,6 +1808,7 @@ def edit_item_page():
         {alias_rows}
         <form method="post" action="/edit/alias-add" style="margin-top:14px;">
           <input type="hidden" name="barcode" value="{_h(barcode)}">
+          {_back_field(back)}
           <div class="fieldRow">
             <input type="text" name="alias" placeholder="Barcode to link" required>
             <button class="btn btn-warn" type="submit">Link Barcode</button>
@@ -1706,6 +1821,7 @@ def edit_item_page():
         <div class="muted">Flags this item as low stock on the Grocery &amp; Low Stock page once quantity drops to or below this number.</div>
         <form method="post" action="/threshold-set" style="margin-top:10px;">
           <input type="hidden" name="barcode" value="{_h(barcode)}">
+          {_back_field(back)}
           <div class="fieldRow">
             <input class="mono" style="width:100px;" type="number" min="0" name="threshold" value="{low}" title="Low threshold">
             <button class="btn btn-wide" type="submit">Set</button>
@@ -1716,14 +1832,15 @@ def edit_item_page():
       <div class="card">
         <h2>More</h2>
         <div class="fieldRow">
-          <a class="btn btn-wide btn-warn" href="/stats?barcode={_u(barcode)}">View Stats</a>
+          <a class="btn btn-wide btn-warn" href="/stats?barcode={_u(barcode)}&back={_u(edit_here)}">View Stats</a>
           <form class="inline" method="post" action="/print-label">
             <input type="hidden" name="barcode" value="{_h(barcode)}">
-            <input type="hidden" name="back" value="/edit?barcode={_u(barcode)}">
+            {_back_field(edit_here)}
             <button class="btn btn-wide" type="submit">Print Label</button>
           </form>
           <form class="inline" method="post" action="/inventory-delete">
             <input type="hidden" name="barcode" value="{_h(barcode)}">
+            {_back_field(back)}
             <button class="btn btn-wide btn-danger" type="submit">Delete Item</button>
           </form>
         </div>
@@ -1749,12 +1866,12 @@ def edit_alias_add():
     barcode = (request.form.get("barcode", "") or "").strip()
     alias = (request.form.get("alias", "") or "").strip()
     if not barcode or not alias:
-        return redirect(f"/edit?barcode={_u(barcode)}&msgtype=danger&msg=Barcode%20required")
+        return redirect(f"{_edit_url(barcode, _back_param())}&msgtype=danger&msg=Barcode%20required")
     try:
         add_barcode_alias(alias, barcode)
-        return redirect(f"/edit?barcode={_u(barcode)}&msgtype=ok&msg=Linked%20{_u(alias)}")
+        return redirect(f"{_edit_url(barcode, _back_param())}&msgtype=ok&msg=Linked%20{_u(alias)}")
     except Exception as e:
-        return redirect(f"/edit?barcode={_u(barcode)}&msgtype=danger&msg={_u(str(e))}")
+        return redirect(f"{_edit_url(barcode, _back_param())}&msgtype=danger&msg={_u(str(e))}")
 
 
 @app.route("/edit/alias-remove", methods=["POST"])
@@ -1763,9 +1880,9 @@ def edit_alias_remove():
     alias = (request.form.get("alias", "") or "").strip()
     try:
         remove_barcode_alias(alias)
-        return redirect(f"/edit?barcode={_u(barcode)}&msgtype=ok&msg=Unlinked%20{_u(alias)}")
+        return redirect(f"{_edit_url(barcode, _back_param())}&msgtype=ok&msg=Unlinked%20{_u(alias)}")
     except Exception as e:
-        return redirect(f"/edit?barcode={_u(barcode)}&msgtype=danger&msg={_u(str(e))}")
+        return redirect(f"{_edit_url(barcode, _back_param())}&msgtype=danger&msg={_u(str(e))}")
 
 
 PHOTO_UPLOAD_MAX_BYTES = 8 * 1024 * 1024  # 8MB — generous for a phone camera JPEG
@@ -1806,7 +1923,7 @@ def edit_item_save():
     if raw_quantity is not None:
         new_qty, qty_error = _parse_quantity(raw_quantity)
         if qty_error:
-            return redirect(f"/edit?barcode={_u(barcode)}&msgtype=danger&msg={_u(qty_error)}")
+            return redirect(f"{_edit_url(barcode, _back_param())}&msgtype=danger&msg={_u(qty_error)}")
 
     # Only touch quantity if the field was actually changed from what the
     # page loaded with — otherwise a scan made while this page was open
@@ -1830,7 +1947,7 @@ def edit_item_save():
         try:
             new_filename = photos.save_photo(photo_file)
         except ValueError as e:
-            return redirect(f"/edit?barcode={_u(barcode)}&msgtype=danger&msg={_u(str(e))}")
+            return redirect(f"{_edit_url(barcode, _back_param())}&msgtype=danger&msg={_u(str(e))}")
         old_photo = get_item_photo(barcode)
         set_item_photo(barcode, new_filename)
         if old_photo:
@@ -1858,12 +1975,14 @@ def edit_item_save():
         # same save typed in a new one (then that new date is kept).
         date_edited = expiration_date != (cur_expiration or "")
         event_id = set_quantity(barcode, new_qty, keep_expiration=date_edited) if qty_changed else None
+        # Back to the list we came from (filters kept), at this item's row.
+        back = _back_param()
         if event_id:
-            msg = _u(f"Saved {new_name} — quantity set to {new_qty}")
-            return redirect(f"/inventory?msgtype=ok&msg={msg}&undo={int(event_id)}")
-        return redirect(f"/inventory?msgtype=ok&msg=Saved%20{_u(new_name)}")
+            return redirect(_return_url(back, f"Saved {new_name} — quantity set to {new_qty}",
+                                        at=item[0], undo=event_id))
+        return redirect(_return_url(back, f"Saved {new_name}", at=item[0]))
     except Exception as e:
-        return redirect(f"/inventory?msgtype=danger&msg=Error%3A%20{_u(str(e))}")
+        return redirect(_return_url(_back_param(), f"Error: {e}", "danger", at=item[0]))
 
 
 QUANTITY_MAX = 100000  # typo guard for the Edit page's exact-quantity field
@@ -1929,6 +2048,9 @@ def stats_page():
     if not stats.get("found"):
         return redirect("/inventory?msgtype=danger&msg=Item%20not%20found")
 
+    # Back to where we came from: the Edit page as-is, or a list at this row.
+    back = _back_param()
+    stats_back = back if back.startswith("/edit") else _return_url(back, at=barcode)
     name = stats["name"]
     location = stats["location"]
     qty = stats["quantity"]
@@ -1946,7 +2068,7 @@ def stats_page():
       <header>
         <div><h1>Stats</h1><div class="sub">Last 28 days (simple local math)</div></div>
         <div class="fieldRow">
-          <a class="btn" href="/inventory">Back</a>
+          <a class="btn" href="{_h(stats_back)}">Back</a>
           <a class="btn" href="/">Home</a>
         </div>
       </header>
@@ -2042,6 +2164,7 @@ def grocery_list_page():
     export_txt = "/export/grocery.txt"
     print_view = "/print/grocery"
     L = labels.get_labels()
+    here = _here()
 
     lis = ""
     for row in grocery_items:
@@ -2050,11 +2173,12 @@ def grocery_list_page():
         aisle = aisle_map.get(barcode)
         aisle_html = f'<span class="chip">{_h(aisle)}</span>' if aisle else ""
         lis += f"""
-        <li style="margin: 10px 0; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+        <li data-item="{_h(barcode)}" style="margin: 10px 0; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
           <span>{_h(name)}</span>
           {aisle_html}
           <form class="inline" method="post" action="/grocery-remove">
             <input type="hidden" name="barcode" value="{_h(barcode)}">
+            {_back_field(here)}
             <button class="btn btn-danger">Remove</button>
           </form>
         </li>
@@ -2063,13 +2187,13 @@ def grocery_list_page():
     low_rows = ""
     for barcode, name, location, qty, low in low_items:
         low_rows += f"""
-        <tr>
+        <tr data-item="{_h(barcode)}">
           <td>{_h(name)}</td>
           <td>{_h(location)}</td>
           <td><span class="qty-low">{int(qty)}</span></td>
           <td>{int(low)}</td>
           <td>
-            <a class="btn btn-warn" href="/stats?barcode={_u(barcode)}">Stats</a>
+            <a class="btn btn-warn" href="/stats?barcode={_u(barcode)}&back={_u(here)}">Stats</a>
           </td>
         </tr>
         """
@@ -2108,23 +2232,24 @@ def grocery_list_page():
       </div>
 
     </div></div>
+    {_return_spot_js()}
     """
 
 
 @app.route("/grocery-remove", methods=["POST"])
 def grocery_remove():
     barcode = (request.form.get("barcode", "") or "").strip()
+    back = _back_param("/grocery-list")
     if not barcode:
-        return redirect("/grocery-list?msgtype=danger&msg=Barcode%20required")
+        return redirect(_return_url(back, "Barcode required", "danger"))
 
     item = get_item_by_barcode(barcode)
     if not item:
-        return redirect("/grocery-list?msgtype=danger&msg=Item%20not%20found")
+        return redirect(_return_url(back, "Item not found", "danger"))
 
     delete_grocery_only(barcode)
-    return redirect(
-        f"/grocery-list?msgtype=ok&msg=Removed%20{_u(item[1])}%20from%20grocery%20list"
-    )
+    # No `at`: the item just left the list, so restore the scroll spot.
+    return redirect(_return_url(back, f"Removed {item[1]} from grocery list"))
 
 
 # ============================================================
@@ -2136,6 +2261,7 @@ def expiring_page():
     zone, shelf, _loc_map = _selected_zone_shelf()
     status_html = _page_status_html()
     items = get_expiring_items(EXPIRATION_WARN_DAYS)
+    here = _here()
 
     rows = ""
     for barcode, name, location, qty, expiration_date in items:
@@ -2144,16 +2270,17 @@ def expiring_page():
         cls = "qty-zero" if level in ("expired", "today") else "qty-low"
         label = status.get("label", "")
         rows += f"""
-        <tr>
+        <tr data-item="{_h(barcode)}">
           <td>{_h(name)}</td>
           <td>{_h(location)}</td>
           <td>{int(qty)}</td>
           <td>{_h(expiration_date)}</td>
           <td><span class="{cls}">{_h(label)}</span></td>
           <td>
-            <a class="btn" href="/edit?barcode={_u(barcode)}">Edit</a>
+            <a class="btn" href="{_h(_edit_url(barcode, here))}">Edit</a>
             <form class="inline" method="post" action="/expiring/dismiss">
               <input type="hidden" name="barcode" value="{_h(barcode)}">
+              {_back_field(here)}
               <button class="btn btn-warn" type="submit" title="Hide this item's expiration alert until its date changes">Dismiss</button>
             </form>
           </td>
@@ -2163,7 +2290,7 @@ def expiring_page():
     dismissed = get_dismissed_expiring_items()
     dismissed_rows = "".join(
         f"""
-        <tr>
+        <tr data-item="{_h(barcode)}">
           <td>{_h(name)}</td>
           <td>{_h(location)}</td>
           <td>{int(qty)}</td>
@@ -2171,6 +2298,7 @@ def expiring_page():
           <td>
             <form class="inline" method="post" action="/expiring/undismiss">
               <input type="hidden" name="barcode" value="{_h(barcode)}">
+              {_back_field(here)}
               <button class="btn" type="submit">Undismiss</button>
             </form>
           </td>
@@ -2207,6 +2335,7 @@ def expiring_page():
       </div>
       '''}
     </div></div>
+    {_return_spot_js()}
     """
 
 
@@ -2217,7 +2346,8 @@ def expiring_dismiss():
         set_expiration_dismissed(barcode, True)
     except Exception:
         pass
-    return redirect("/expiring?msgtype=ok&msg=Alert%20dismissed")
+    # The row moves to the Dismissed table; land on it there.
+    return redirect(_return_url(_back_param("/expiring"), "Alert dismissed", at=barcode))
 
 
 @app.route("/expiring/undismiss", methods=["POST"])
@@ -2227,7 +2357,7 @@ def expiring_undismiss():
         set_expiration_dismissed(barcode, False)
     except Exception:
         pass
-    return redirect("/expiring?msgtype=ok&msg=Alert%20restored")
+    return redirect(_return_url(_back_param("/expiring"), "Alert restored", at=barcode))
 
 
 @app.route("/api/expiring-count")
@@ -2459,6 +2589,7 @@ def tools_page():
       </div>
 
     </div></div>
+    {_return_spot_js()}
     """
 
 
