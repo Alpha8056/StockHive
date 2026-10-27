@@ -311,6 +311,8 @@ branch can add things to the database that stay there after you switch back.
    both a node and the launcher, restart both: they share the same code.
 
 While you're on a branch, **Update** pulls new changes from **that branch**, not from `main`.
+Switch the test node back to `main` (below) before deleting the branch on GitHub, or that
+node's **Update** will fail.
 
 **Switch back to main:**
 
