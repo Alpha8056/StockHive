@@ -271,6 +271,10 @@ def _migrate(conn):
     # so their label can print "Made:"; NULL for everything else.
     _ensure_column(conn, "items", "made_date", "made_date TEXT")
 
+    # Ensure "Include in Grocery List" flag exists. DEFAULT 1 fills every
+    # existing row with ON, so current behavior is unchanged on upgrade.
+    _ensure_column(conn, "items", "include_in_grocery", "include_in_grocery INTEGER NOT NULL DEFAULT 1")
+
     # Undo marker on event_log (the live event table, owned by
     # inventory._ensure_schema — which creates it with this column on
     # fresh installs, so only pre-existing tables need adding to).

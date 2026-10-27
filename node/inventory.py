@@ -406,11 +406,17 @@ def _log_event(cur, barcode, event_type, delta=0, source="ui"):
 def _sync_grocery(cur, item_id, qty):
     """
     Keeps grocery_list in sync:
+      - item excluded ("Include in Grocery List" OFF) => never on the list
       - if qty <= 0 => ensure item is in grocery_list
       - if qty > 0  => remove from grocery_list
+    Every write to grocery_list goes through here, so the include flag
+    is enforced in one place.
     IMPORTANT: uses SAME cursor/transaction as caller to avoid DB locks.
     """
-    if qty <= 0:
+    cur.execute("SELECT include_in_grocery FROM items WHERE id = ?;", (item_id,))
+    row = cur.fetchone()
+    included = row is None or bool(row[0])
+    if qty <= 0 and included:
         cur.execute(
             """
             INSERT OR IGNORE INTO grocery_list (item_id, added_date)
@@ -657,6 +663,7 @@ def get_grocery_list():
             SELECT i.barcode as barcode, i.name as name
             FROM grocery_list g
             JOIN items i ON i.id = g.item_id
+            WHERE i.include_in_grocery = 1
             ORDER BY g.added_date DESC;
             """
         )
@@ -670,9 +677,10 @@ def get_grocery_list():
 # SECTION: Add / Update Inventory
 # ============================================================
 
-def add_item(barcode: str, name: str, location: str):
+def add_item(barcode: str, name: str, location: str, include_in_grocery: bool = True):
     """
-    Adds a new item (qty starts at 1).
+    Adds a new item (qty starts at 1). include_in_grocery is saved before
+    the first grocery sync, so an excluded item never touches the list.
     Raises ValueError on bad input.
     """
     barcode = (barcode or "").strip()
@@ -693,10 +701,10 @@ def add_item(barcode: str, name: str, location: str):
         # Insert new item with qty=1
         cur.execute(
             """
-            INSERT INTO items (barcode, name, location, quantity)
-            VALUES (?, ?, ?, 1);
+            INSERT INTO items (barcode, name, location, quantity, include_in_grocery)
+            VALUES (?, ?, ?, 1, ?);
             """,
-            (barcode, name, location),
+            (barcode, name, location, 1 if include_in_grocery else 0),
         )
 
         # Fetch id for grocery sync/logging
@@ -919,6 +927,60 @@ def set_quantity(barcode: str, new_qty: int):
         conn.close()
 
 
+def get_item_include_in_grocery(barcode: str) -> bool:
+    """True if the item may go on the Grocery List (default for unknown)."""
+    barcode = (barcode or "").strip()
+    canonical = resolve_barcode(barcode)
+    if canonical:
+        barcode = canonical
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT include_in_grocery FROM items WHERE barcode = ?;", (barcode,))
+        row = cur.fetchone()
+        return True if row is None else bool(row["include_in_grocery"])
+    finally:
+        conn.close()
+
+
+def set_item_include_in_grocery(barcode: str, include: bool) -> bool:
+    """
+    Turns "Include in Grocery List" on/off and re-syncs the list right
+    away: OFF removes the item from the list; ON puts it back if qty is 0.
+    Logs grocery_on / grocery_off (shown in Recent Changes, not undoable).
+    Returns True if the value changed.
+    """
+    barcode = (barcode or "").strip()
+    if not barcode:
+        raise ValueError("Barcode required")
+    canonical = resolve_barcode(barcode)
+    if canonical:
+        barcode = canonical
+    include = 1 if include else 0
+
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN IMMEDIATE;")
+        cur.execute("SELECT id, quantity, include_in_grocery FROM items WHERE barcode = ?;", (barcode,))
+        row = cur.fetchone()
+        if not row:
+            raise ValueError("Item not found")
+        if int(row["include_in_grocery"]) == include:
+            conn.rollback()
+            return False
+        cur.execute("UPDATE items SET include_in_grocery = ? WHERE id = ?;", (include, row["id"]))
+        _sync_grocery(cur, row["id"], row["quantity"])
+        _log_event(cur, barcode, "grocery_on" if include else "grocery_off", delta=0, source="ui")
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def log_item_edit(barcode: str) -> None:
     """One "edit" entry for an Edit-page save that changed something other
     than quantity (a qty change logs its own "correct" event), for Recent
@@ -1094,6 +1156,7 @@ def get_low_stock():
             WHERE low_threshold > 0
               AND quantity > 0
               AND quantity <= low_threshold
+              AND include_in_grocery = 1
             ORDER BY name COLLATE NOCASE;
             """
         )
@@ -1257,7 +1320,7 @@ def get_event_log(limit=200):
         conn.close()
 
 
-RECENT_CHANGE_TYPES = ("add_new", "add", "remove", "undo", "edit", "correct")
+RECENT_CHANGE_TYPES = ("add_new", "add", "remove", "undo", "edit", "correct", "grocery_on", "grocery_off")
 
 
 def get_recent_changes(limit=10):

@@ -66,6 +66,8 @@ from inventory import (
     set_item_aisle,
     get_item_made_date,
     set_item_made_date,
+    get_item_include_in_grocery,
+    set_item_include_in_grocery,
     get_aisle_map,
     add_item,
     increment_existing,
@@ -624,6 +626,18 @@ def _styles():
               font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.04em; vertical-align:middle; }
       .rcTagMuted{ color:var(--muted); }
       form.inline{ display:inline; }
+      /* On/off switch (e.g. "Include in Grocery List"): a real checkbox,
+         visually replaced by the track; the whole row is the tap target. */
+      .switchRow{ position:relative; display:inline-flex; align-items:center; gap:12px; min-height:48px;
+                  cursor:pointer; font-size:16px; user-select:none; }
+      .switchRow input{ position:absolute; opacity:0; width:1px; height:1px; margin:0; }
+      .switchTrack{ position:relative; flex-shrink:0; width:56px; height:32px; border-radius:999px;
+                    background:var(--btn); border:1px solid var(--border); transition:background .15s ease, border-color .15s ease; }
+      .switchTrack::after{ content:""; position:absolute; top:3px; left:3px; width:24px; height:24px; border-radius:50%;
+                           background:var(--muted); transition:transform .15s ease, background .15s ease; }
+      .switchRow input:checked + .switchTrack{ background:var(--ok); border-color:var(--ok); }
+      .switchRow input:checked + .switchTrack::after{ transform:translateX(24px); background:#fff; }
+      .switchRow input:focus-visible + .switchTrack{ box-shadow:0 0 0 3px rgba(90,162,255,0.35); }
       .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
       @media (max-width:520px){ h1{font-size:24px;} .btn-wide{width:100%;} .zone-btn{min-width:46%;} }
     </style>
@@ -1069,7 +1083,8 @@ def resolve_barcode_page():
                 error = "Name is required."
             else:
                 try:
-                    add_item(barcode, name, new_location)
+                    include = _form_include_in_grocery()
+                    add_item(barcode, name, new_location, include_in_grocery=include is not False)
                     if expiration_date:
                         update_item_expiration(barcode, expiration_date)
                     if made_date:
@@ -1091,6 +1106,7 @@ def resolve_barcode_page():
         barcode=barcode,
         # Generated codes only ever create a new item — hide "Link to existing".
         custom=is_custom_barcode(barcode),
+        grocery_switch=Markup(_grocery_switch_html(True)),
         leftover_default_days=LEFTOVER_DEFAULT_DAYS,
         leftover_max_days=LEFTOVER_MAX_DAYS,
         items=items,
@@ -1384,10 +1400,13 @@ def _recent_changes_html() -> str:
     the last 10 scans / -1 taps / undos / edits. One flex row per change,
     so it reads the same in the wide table and narrow card layouts."""
     rows = ""
+    list_label = _h(labels.get_labels()["grocery_list"])
     for ch in get_recent_changes(10):
         delta = int(ch["delta"] or 0)
         if ch["event_type"] == "edit":
             change = '<span class="rcChange rcEdit">Edited</span>'
+        elif ch["event_type"] in ("grocery_on", "grocery_off"):
+            change = f'<span class="rcChange rcEdit">{"On" if ch["event_type"] == "grocery_on" else "Off"} list</span>'
         elif delta > 0:
             change = f'<span class="rcChange rcPlus">+{delta}</span>'
         elif delta < 0:
@@ -1402,6 +1421,8 @@ def _recent_changes_html() -> str:
             tags += '<span class="rcTag">Correction</span>'
         elif ch["event_type"] == "add_new":
             tags += '<span class="rcTag">New</span>'
+        elif ch["event_type"] in ("grocery_on", "grocery_off"):
+            tags += f'<span class="rcTag">{list_label}</span>'
         if ch["undone_by"] is not None:
             tags += '<span class="rcTag rcTagMuted">Undone</span>'
 
@@ -1613,6 +1634,7 @@ def edit_item_page():
             <input type="hidden" name="orig_quantity" value="{int(qty)}">
           </div>
           <div class="muted" style="margin-top:6px;">For fixing a miscount. Logged as a correction, so it won't skew usage stats.</div>
+          <div style="margin-top:14px;">{_grocery_switch_html(get_item_include_in_grocery(barcode))}</div>
           <div class="fieldRow" style="margin-top:14px;margin-bottom:14px;">
             <label style="color:var(--muted);font-size:14px;">Expiration Date (optional)</label>
           </div>
@@ -1739,6 +1761,7 @@ def edit_item_save():
         aisle = (request.form.get("aisle", "") or "").strip()
         raw_quantity = request.form.get("quantity")
         raw_orig_quantity = request.form.get("orig_quantity")
+        include_in_grocery = _form_include_in_grocery()
         remove_photo = request.form.get("remove_photo") == "1"
         photo_file = request.files.get("photo")
     except RequestEntityTooLarge:
@@ -1800,6 +1823,11 @@ def edit_item_save():
         set_item_aisle(barcode, aisle)
         if other_changed:
             log_item_edit(barcode)
+        # Before the quantity change, so a save that turns the toggle OFF
+        # and sets qty to 0 never puts the item on the list. Logs its own
+        # "On list"/"Off list" row only when the value actually changed.
+        if include_in_grocery is not None:
+            set_item_include_in_grocery(barcode, include_in_grocery)
         # Logged after the edit event so the Correction sits on top in
         # Recent Changes (newest first).
         event_id = set_quantity(barcode, new_qty) if qty_changed else None
@@ -1812,6 +1840,30 @@ def edit_item_save():
 
 
 QUANTITY_MAX = 100000  # typo guard for the Edit page's exact-quantity field
+
+
+def _form_include_in_grocery():
+    """The "Include in Grocery List" switch from a submitted form: True/False,
+    or None if the form didn't have the switch at all (an older cached
+    page) — so a missing field never silently turns an item OFF. An
+    unticked checkbox sends nothing, hence the separate marker field."""
+    if request.form.get("include_in_grocery_present") != "1":
+        return None
+    return request.form.get("include_in_grocery") == "1"
+
+
+def _grocery_switch_html(checked: bool) -> str:
+    """Large tap-friendly on/off switch for "Include in <list name>"."""
+    list_label = labels.get_labels()["grocery_list"]
+    return f"""
+          <input type="hidden" name="include_in_grocery_present" value="1">
+          <label class="switchRow">
+            <input type="checkbox" name="include_in_grocery" value="1" {"checked" if checked else ""}>
+            <span class="switchTrack" aria-hidden="true"></span>
+            <span>Include in {_h(list_label)}</span>
+          </label>
+          <div class="muted" style="margin-top:4px;">Off = never added to the {_h(list_label)}, even at zero.</div>
+    """
 
 
 def _parse_quantity(raw):
