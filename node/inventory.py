@@ -719,9 +719,28 @@ def add_item(barcode: str, name: str, location: str, include_in_grocery: bool = 
         conn.close()
 
 
+def _clear_expiration_on_restock(cur, item_id, barcode):
+    """Called when an item goes from 0 back to 1+: the old expiration date
+    belonged to the stock that ran out, so clear it (and any dismissal)
+    instead of letting the restocked item come back already "expired".
+    Not used by Undo — undoing an accidental -1 should restore the date
+    untouched. Logged as "clear_expiration" (event log only)."""
+    cur.execute(
+        """
+        UPDATE items SET expiration_date = NULL, dismissed_expiration = 0
+        WHERE id = ?
+          AND ((expiration_date IS NOT NULL AND expiration_date != '') OR dismissed_expiration = 1);
+        """,
+        (item_id,),
+    )
+    if cur.rowcount:
+        _log_event(cur, barcode, "clear_expiration", delta=0, source="auto")
+
+
 def increment_existing(barcode: str):
     """
-    +1 quantity. Supports alias barcodes.
+    +1 quantity. Supports alias barcodes. A 0 -> 1 restock clears the old
+    expiration date (see _clear_expiration_on_restock).
     Returns the logged event id (for Undo).
     """
     barcode = (barcode or "").strip()
@@ -749,6 +768,8 @@ def increment_existing(barcode: str):
         if not row:
             raise ValueError("Item not found")
 
+        if row["quantity"] == 1:    # was 0 (quantity never goes below 0)
+            _clear_expiration_on_restock(cur, row["id"], barcode)
         _sync_grocery(cur, row["id"], row["quantity"])
         event_id = _log_event(cur, barcode, "add", delta=1, source="ui")
 
@@ -879,11 +900,13 @@ def undo_event(event_id):
         conn.close()
 
 
-def set_quantity(barcode: str, new_qty: int):
+def set_quantity(barcode: str, new_qty: int, keep_expiration: bool = False):
     """
     Sets an exact quantity (Edit page, for fixing a miscount). Logged as
     a "correct" event with delta = new - old, which usage stats ignore,
     so a 10 -> 4 fix doesn't read as 6 used. Supports alias barcodes.
+    A 0 -> 1+ change clears the old expiration date, unless
+    keep_expiration (the same Edit save entered a new date).
     Returns the event id (for Undo), or None if the qty was unchanged —
     nothing is written or logged then.
     """
@@ -915,6 +938,8 @@ def set_quantity(barcode: str, new_qty: int):
             return None
 
         cur.execute("UPDATE items SET quantity = ? WHERE id = ?;", (new_qty, row["id"]))
+        if int(row["quantity"]) == 0 and new_qty > 0 and not keep_expiration:
+            _clear_expiration_on_restock(cur, row["id"], barcode)
         _sync_grocery(cur, row["id"], new_qty)
         event_id = _log_event(cur, barcode, "correct", delta=delta, source="ui")
 
@@ -1226,6 +1251,7 @@ def get_expiring_items(days_ahead=3):
             WHERE expiration_date IS NOT NULL
               AND expiration_date != ''
               AND expiration_date <= ?
+              AND quantity > 0
               AND dismissed_expiration = 0
             ORDER BY expiration_date ASC;
             """,
@@ -1253,6 +1279,7 @@ def get_dismissed_expiring_items():
             WHERE expiration_date IS NOT NULL
               AND expiration_date != ''
               AND dismissed_expiration = 1
+              AND quantity > 0
             ORDER BY expiration_date ASC;
             """
         )

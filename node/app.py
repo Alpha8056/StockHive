@@ -473,6 +473,12 @@ def _styles():
                margin:10px 0 14px 0; font-weight:800; opacity:1; transition:opacity 220ms ease, transform 220ms ease; }
       .status.ok{ color:var(--ok); } .status.danger{ color:var(--danger); } .status.warn{ color:var(--warn); }
       .status.hide{ opacity:0; transform: translateY(-4px); }
+      /* Links on the status banner (Edit item / Print label): banner's own
+         colour, underlined, with padding for a 44px touch target. */
+      .bannerActions{ display:inline-flex; flex-wrap:wrap; align-items:center; gap:4px 16px; margin-left:12px; vertical-align:middle; }
+      .bannerLink{ all:unset; display:inline-flex; align-items:center; min-height:44px; padding:0 4px;
+                   cursor:pointer; color:inherit; font:inherit; text-decoration:underline; text-underline-offset:3px; }
+      .bannerLink:focus-visible{ outline:2px solid currentColor; outline-offset:2px; border-radius:6px; }
       .chip{ display:inline-block; padding:7px 11px; border:1px solid var(--border); border-radius:999px;
              background:rgba(255,255,255,0.03); margin-left:8px; font-size:14px; }
       .muted{ color:var(--muted); font-size:14px; }
@@ -718,19 +724,32 @@ def _page_status_html():
     if not msg:
         return ""
     cls = "ok" if msgtype == "ok" else ("warn" if msgtype == "warn" else "danger")
+    if cls != "ok":
+        return f"<div id='statusBanner' class='status {cls}'>{msg}</div>"
+
+    # Optional actions after a scan-in: Edit item (a plain link) and, for
+    # a newly created custom barcode, Print label.
+    edit_code = (request.args.get("edit") or "").strip()
     print_code = (request.args.get("print") or "").strip()
-    if cls == "ok" and print_code:
+    actions = ""
+    if edit_code:
+        actions += f"<a class='bannerLink' href='/edit?barcode={_u(edit_code)}'>Edit item</a>"
+    if print_code:
         # POST (not a link) so a browser prefetch can never trigger a print.
         back = escape(request.full_path.rstrip("?"), quote=True)
-        return (
-            f"<div id='statusBanner' class='status {cls}' data-keep>{msg} &nbsp;"
+        actions += (
             f"<form class='inline' method='post' action='/print-label'>"
             f"<input type='hidden' name='barcode' value='{escape(print_code, quote=True)}'>"
             f"<input type='hidden' name='back' value='{back}'>"
-            f"<button type='submit' style='all:unset;cursor:pointer;text-decoration:underline;'>Print label</button>"
-            f"</form></div>"
+            f"<button type='submit' class='bannerLink'>Print label</button>"
+            f"</form>"
         )
-    return f"<div id='statusBanner' class='status {cls}'>{msg}</div>"
+    if not actions:
+        return f"<div id='statusBanner' class='status {cls}'>{msg}</div>"
+    # A Print label banner stays until tapped (printing takes a moment);
+    # an Edit-only banner still auto-hides so every scan doesn't leave one.
+    keep = " data-keep" if print_code else ""
+    return f"<div id='statusBanner' class='status {cls}'{keep}>{msg}<span class='bannerActions'>{actions}</span></div>"
 
 
 # ============================================================
@@ -871,7 +890,7 @@ def _shelf_selector(current_zone, current_shelf, loc_map):
       </div>
     """
 
-def _home_url(zone, shelf, focus='scan', msg="", msgtype="ok", undo=None, print_code=None):
+def _home_url(zone, shelf, focus='scan', msg="", msgtype="ok", undo=None, print_code=None, edit_code=None):
     url = f"/?zone={_u(zone)}&shelf={shelf}&focus={_u(focus)}&msgtype={_u(msgtype)}"
     if msg:
         url += f"&msg={_u(msg)}"
@@ -879,6 +898,8 @@ def _home_url(zone, shelf, focus='scan', msg="", msgtype="ok", undo=None, print_
         url += f"&undo={int(undo)}"
     if print_code:
         url += f"&print={_u(print_code)}"
+    if edit_code:
+        url += f"&edit={_u(edit_code)}"
     return url
 
 def _home_href(zone, shelf, focus='scan', msg="", msgtype="ok"):
@@ -978,7 +999,7 @@ def scan():
     if item:
         event_id = increment_existing(barcode)
         new_qty = int(item[3]) + 1
-        return redirect(_home_url(zone, shelf, focus='scan', msg=f"{item[1]} +1({new_qty})", msgtype="ok", undo=event_id))
+        return redirect(_home_url(zone, shelf, focus='scan', msg=f"{item[1]} +1({new_qty})", msgtype="ok", undo=event_id, edit_code=item[0]))
 
     # Unknown barcode → go to resolver UI (alias or new item)
     return redirect(url_for("resolve_barcode_page", barcode=barcode, zone=zone, shelf=shelf))
@@ -1027,7 +1048,7 @@ def resolve_barcode_page():
         item = get_item_by_barcode(canonical)
         name = item[1] if item else canonical
         new_qty = int(item[3]) if item else "?"
-        return redirect(_home_url(zone, shelf, focus='scan', msg=f"{name} +1({new_qty})", msgtype="ok"))
+        return redirect(_home_url(zone, shelf, focus='scan', msg=f"{name} +1({new_qty})", msgtype="ok", edit_code=canonical))
 
     error = None
 
@@ -1046,7 +1067,7 @@ def resolve_barcode_page():
                     item = get_item_by_barcode(canonical_barcode)
                     name = item[1] if item else canonical_barcode
                     new_qty = int(item[3]) if item else "?"
-                    return redirect(_home_url(zone, shelf, focus='scan', msg=f"Linked: {name} +1({new_qty})", msgtype="ok"))
+                    return redirect(_home_url(zone, shelf, focus='scan', msg=f"Linked: {name} +1({new_qty})", msgtype="ok", edit_code=canonical_barcode))
                 except Exception as e:
                     error = str(e)
 
@@ -1091,8 +1112,8 @@ def resolve_barcode_page():
                         set_item_made_date(barcode, made_date.isoformat())
                     if is_custom_barcode(barcode):
                         note_custom_barcode_used(barcode)
-                        return redirect(_home_url(zone, shelf, focus='scan', msg=f"Created: {name} +1(1)", msgtype="ok", print_code=barcode))
-                    return redirect(_home_url(zone, shelf, focus='scan', msg=f"{name} +1(1)", msgtype="ok"))
+                        return redirect(_home_url(zone, shelf, focus='scan', msg=f"Created: {name} +1(1)", msgtype="ok", print_code=barcode, edit_code=barcode))
+                    return redirect(_home_url(zone, shelf, focus='scan', msg=f"{name} +1(1)", msgtype="ok", edit_code=barcode))
                 except Exception as e:
                     error = str(e)
 
@@ -1830,7 +1851,10 @@ def edit_item_save():
             set_item_include_in_grocery(barcode, include_in_grocery)
         # Logged after the edit event so the Correction sits on top in
         # Recent Changes (newest first).
-        event_id = set_quantity(barcode, new_qty) if qty_changed else None
+        # A 0 -> 1+ change clears the old expiration date, unless this
+        # same save typed in a new one (then that new date is kept).
+        date_edited = expiration_date != (cur_expiration or "")
+        event_id = set_quantity(barcode, new_qty, keep_expiration=date_edited) if qty_changed else None
         if event_id:
             msg = _u(f"Saved {new_name} — quantity set to {new_qty}")
             return redirect(f"/inventory?msgtype=ok&msg={msg}&undo={int(event_id)}")
