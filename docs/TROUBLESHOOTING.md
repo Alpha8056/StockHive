@@ -3,8 +3,8 @@
 This guide helps when something isn't working. Each problem lists **what you see**,
 the **likely cause**, and the **fix**, in that order.
 
-For everyday use, see the [User Guide](USER-GUIDE.md). For installing, see
-[README.md](../README.md#install).
+For everyday use, see the [User Guide](USER-GUIDE.md). For installing, see the
+[Install Guide](INSTALL-GUIDE.md).
 
 > Button and menu names are shown in **bold**, exactly as they appear on screen.
 > Text like `<node-ip>` is a placeholder. Replace it, including the `< >`, with
@@ -210,7 +210,7 @@ Update failed: error: Your local changes to the following files would be overwri
 ```
 
 **Likely cause:** a file in the StockHive folder differs from the official copy. Often only
-its "can run" permission changed, for example after `chmod +x setup.sh` from the README.
+its "can run" permission changed, for example after running `chmod +x setup.sh`.
 
 **Fix:**
 
@@ -405,5 +405,5 @@ but it **does** change some things. Know these before you run it:
 
 ```bash
 cd ~/StockHive
-sudo ./setup.sh
+sudo bash setup.sh
 ```

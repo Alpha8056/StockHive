@@ -5,7 +5,7 @@
 # (mDNS discovery + weather + node grid), or both on this machine.
 #
 # Run from the root of the cloned repo:
-#   chmod +x setup.sh && sudo ./setup.sh
+#   sudo bash setup.sh
 # =============================================================================
 
 set -e

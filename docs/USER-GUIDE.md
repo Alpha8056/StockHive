@@ -9,6 +9,7 @@ the label printer are covered elsewhere:
 [README.md](../README.md), [nasbackup/README.md](../nasbackup/README.md) and
 [printbridge/README.md](../printbridge/README.md).
 
+Installing for the first time? See the [Install Guide](INSTALL-GUIDE.md).
 Something not working? See [Troubleshooting](TROUBLESHOOTING.md).
 
 > Button and menu names are shown in **bold**, exactly as they appear on screen.

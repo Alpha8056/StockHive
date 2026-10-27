@@ -49,10 +49,12 @@ them without any router configuration.
 
 ## Install
 
+First time? Follow the step-by-step [Install Guide](docs/INSTALL-GUIDE.md).
+
 Same script everywhere — it asks what this machine should run:
 ```bash
-git clone <this-repo> ~/StockHive && cd ~/StockHive
-chmod +x setup.sh && sudo ./setup.sh
+git clone https://github.com/Alpha8056/StockHive.git ~/StockHive && cd ~/StockHive
+sudo bash setup.sh
 ```
 Choose **node**, **launcher**, or **both**. If you pick both on the same
 machine (handy for testing without a second Pi/LXC), it'll ask for two
@@ -107,7 +109,7 @@ because the token hash is stored in the inventory database.
 ## Restoring a node
 
 On a new machine, or after a rebuild:
-1. Clone the repo and run `sudo ./setup.sh` (see [Install](#install)), choosing **node**.
+1. Clone the repo and run `sudo bash setup.sh` (see [Install](#install)), choosing **node**.
 2. Open the new node, go to **Tools > Restore**, choose a backup `.zip` and upload it.
    That restores the inventory database and item photos, and the admin token
    if the old node had one.
