@@ -2249,7 +2249,7 @@ def grocery_remove():
 
     delete_grocery_only(barcode)
     # No `at`: the item just left the list, so restore the scroll spot.
-    return redirect(_return_url(back, f"Removed {item[1]} from grocery list"))
+    return redirect(_return_url(back, f"Removed {item[1]} from {labels.get_labels()['grocery_list']}"))
 
 
 # ============================================================
@@ -2539,7 +2539,7 @@ def tools_page():
 
       <div class="card">
         <h2>Restore</h2>
-        <div class="muted">Upload a backup .zip (includes photos) or an older plain inventory.db file (no photos). After restore, restart the app/service.</div>
+        <div class="muted">Upload a backup .zip (includes photos) or an older plain inventory.db file (no photos).</div>
         <form method="post" action="/restore" enctype="multipart/form-data">
           <div class="fieldRow">
             <input type="file" name="dbfile" accept=".zip,.db">
@@ -3212,10 +3212,8 @@ def share_grocery():
 
           <div class="card">
             <div class="muted">QR feature is not installed.</div>
-            <div class="muted">Fix:</div>
-            <pre style="white-space:pre-wrap;">cd ~/node
-source venv/bin/activate
-pip install qrcode[pil]</pre>
+            <div class="muted">To fix it, run this in your node folder, then restart the node:</div>
+            <pre style="white-space:pre-wrap;">venv/bin/pip install "qrcode[pil]"</pre>
           </div>
         </div></div>
         """

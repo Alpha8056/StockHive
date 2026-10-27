@@ -6,6 +6,8 @@ IP and its own database, and one shared **launcher** page finds them all automat
 Nodes and the launcher run on a Raspberry Pi, a Proxmox LXC, or any
 Debian-like Linux box.
 
+**New to StockHive?** Start with the [User Guide](docs/USER-GUIDE.md).
+
 This is v2, a clean-break rewrite of [StockPi-InfoPanel](https://github.com/Alpha8056/StockPi-InfoPanel).
 The old InfoPanel (network/RF/homelab monitoring) has been retired; the only
 piece of it worth keeping — weather — has been rebuilt into the launcher.
