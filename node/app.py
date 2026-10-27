@@ -2539,7 +2539,7 @@ def tools_page():
 
       <div class="card">
         <h2>Restore</h2>
-        <div class="muted">Upload a backup .zip (includes photos) or an older plain inventory.db file (no photos).</div>
+        <div class="muted">Upload a backup .zip (includes photos) or an older plain inventory.db file (no photos). After restoring, restart the service (Settings &gt; Device &gt; Restart Service) so the node reloads its identity (name, theme and ID) from the backup.</div>
         <form method="post" action="/restore" enctype="multipart/form-data">
           <div class="fieldRow">
             <input type="file" name="dbfile" accept=".zip,.db">

@@ -7,6 +7,7 @@ Nodes and the launcher run on a Raspberry Pi, a Proxmox LXC, or any
 Debian-like Linux box.
 
 **New to StockHive?** Start with the [User Guide](docs/USER-GUIDE.md).
+Something not working? See [Troubleshooting](docs/TROUBLESHOOTING.md).
 
 This is v2, a clean-break rewrite of [StockPi-InfoPanel](https://github.com/Alpha8056/StockPi-InfoPanel).
 The old InfoPanel (network/RF/homelab monitoring) has been retired; the only
@@ -37,13 +38,14 @@ node/       One Flask app per node. Barcode scan, quantities, grocery/part
 launcher/   One Flask app, on its own device. Browses mDNS for nodes and
             shows them as a tile grid (search nodes and items, offline
             greyed out with a last-seen time). Settings > Nodes shows each
-            node's build, updates nodes, and removes one permanently.
+            node's build, updates nodes, and hides or restores a node.
             Also owns the weather widget (NWS API).
 ```
 
 Each node is reachable directly at `http://<its-ip>/` — there's no longer a
-single box path-routing between apps like in v1. mDNS/Avahi (`.local`
-hostnames) means nothing needs a static IP or router configuration.
+single box path-routing between apps like in v1. Nodes announce themselves
+over mDNS, built into StockHive (Avahi isn't required), so the launcher finds
+them without any router configuration.
 
 ## Install
 

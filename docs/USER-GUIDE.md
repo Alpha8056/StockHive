@@ -9,6 +9,8 @@ the label printer are covered elsewhere:
 [README.md](../README.md), [nasbackup/README.md](../nasbackup/README.md) and
 [printbridge/README.md](../printbridge/README.md).
 
+Something not working? See [Troubleshooting](TROUBLESHOOTING.md).
+
 > Button and menu names are shown in **bold**, exactly as they appear on screen.
 > Addresses like `http://<node-ip>/` mean "the address of your node". Replace
 > `<node-ip>` with your node's address (for example, the one shown on its tile).
