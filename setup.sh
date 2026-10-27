@@ -19,7 +19,7 @@ warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 error()   { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
 
 if [[ $EUID -ne 0 ]]; then
-  error "Please run with sudo: sudo ./setup.sh"
+  error "Please run with sudo: sudo bash setup.sh"
 fi
 
 REAL_USER="${SUDO_USER:-$(logname 2>/dev/null || echo pi)}"
