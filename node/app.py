@@ -476,6 +476,9 @@ def _styles():
       /* Links on the status banner (Edit item / Print label): banner's own
          colour, underlined, with padding for a 44px touch target. */
       .bannerActions{ display:inline-flex; flex-wrap:wrap; align-items:center; gap:4px 16px; margin-left:12px; vertical-align:middle; }
+      /* The Print label <form> adds no box of its own, so its button lines
+         up exactly like the Edit item link (beats the later form.inline). */
+      .bannerActions form.inline{ display:contents; }
       .bannerLink{ all:unset; display:inline-flex; align-items:center; min-height:44px; padding:0 4px;
                    cursor:pointer; color:inherit; font:inherit; text-decoration:underline; text-underline-offset:3px; }
       .bannerLink:focus-visible{ outline:2px solid currentColor; outline-offset:2px; border-radius:6px; }
