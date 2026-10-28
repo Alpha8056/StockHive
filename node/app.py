@@ -82,6 +82,7 @@ from inventory import (
     add_item,
     increment_existing,
     remove_one,
+    scan_out,
     set_quantity,
     undo_event,
     get_undo_offer,
@@ -1180,9 +1181,13 @@ def remove_one_route():
     if not item:
         return redirect(_home_url(zone, shelf, focus="remove", msg="Item not found", msgtype="danger"))
 
-    event_id = remove_one(barcode)
-    new_qty = max(int(item[3]) - 1, 0)
-    return redirect(_home_url(zone, shelf, focus="remove", msg=f"{item[1]} -1({new_qty})", msgtype="danger", undo=event_id))
+    # A leftover scanned out to 0 is deleted (Undo restores it).
+    result = scan_out(barcode)
+    if result["finished"]:
+        msg = f"Finished {item[1]}, removed from inventory"
+    else:
+        msg = f"{item[1]} -1({max(int(item[3]) - 1, 0)})"
+    return redirect(_home_url(zone, shelf, focus="remove", msg=msg, msgtype="danger", undo=result["event_id"]))
 
 
 @app.route("/move")
@@ -1451,6 +1456,8 @@ def _recent_changes_html() -> str:
         delta = int(ch["delta"] or 0)
         if ch["event_type"] == "edit":
             change = '<span class="rcChange rcEdit">Edited</span>'
+        elif ch["event_type"] == "finish" and delta == 0:
+            change = '<span class="rcChange rcEdit">Removed</span>'
         elif ch["event_type"] in ("grocery_on", "grocery_off"):
             change = f'<span class="rcChange rcEdit">{"On" if ch["event_type"] == "grocery_on" else "Off"} list</span>'
         elif delta > 0:
@@ -1467,6 +1474,8 @@ def _recent_changes_html() -> str:
             tags += '<span class="rcTag">Correction</span>'
         elif ch["event_type"] == "add_new":
             tags += '<span class="rcTag">New</span>'
+        elif ch["event_type"] == "finish":
+            tags += '<span class="rcTag">Finished</span>'
         elif ch["event_type"] in ("grocery_on", "grocery_off"):
             tags += f'<span class="rcTag">{list_label}</span>'
         if ch["undone_by"] is not None:
@@ -1656,8 +1665,11 @@ def _undo_toast_html() -> str:
         return ""
     args = [(k, v) for k, v in request.args.items(multi=True) if k not in ("undo", "msg", "msgtype")]
     back = request.path + ("?" + urlencode(args) if args else "")
-    sign = "+" if offer["delta"] > 0 else "-"
-    label = f"{offer['name']} {sign}{abs(offer['delta'])}"
+    if offer["finished"]:
+        label = f"Finished {offer['name']}"
+    else:
+        sign = "+" if offer["delta"] > 0 else "-"
+        label = f"{offer['name']} {sign}{abs(offer['delta'])}"
     return f"""
     <div class="undoToast" id="undoToast" role="status">
       <div class="undoText">{escape(label)}</div>
@@ -1692,7 +1704,7 @@ def undo_route():
         result = undo_event(int(request.form.get("event_id", "")))
     except ValueError as e:
         # int() failures also land here; keep the message user-facing.
-        reason = str(e) if str(e) in ("Nothing to undo", "Already undone", "Too late to undo", "Item no longer exists") else "Nothing to undo"
+        reason = str(e) if str(e) in ("Nothing to undo", "Already undone", "Too late to undo", "Item no longer exists", "Barcode in use again") else "Nothing to undo"
         return redirect(_with_status(back, reason, "warn"))
     return redirect(_with_status(back, f"Undone: {result['name']} now {result['qty']}", "ok"))
 

@@ -8,6 +8,7 @@
 # ============================================================
 # SECTION: Imports
 # ============================================================
+import json
 import os
 import re
 import sqlite3
@@ -43,11 +44,12 @@ def _ensure_schema(conn: sqlite3.Connection):
             event_type TEXT NOT NULL,
             delta INTEGER NOT NULL DEFAULT 0,
             source TEXT NOT NULL DEFAULT 'ui',
-            undone_by INTEGER
+            undone_by INTEGER,
+            snapshot TEXT
         );
         """
     )
-    # (Existing installs get undone_by from db._migrate instead — CREATE
+    # (Existing installs get undone_by and snapshot from db._migrate instead — CREATE
     # TABLE IF NOT EXISTS above never alters a table that's already there.)
 
     # barcode aliases: multiple UPCs mapping to a single item row
@@ -384,7 +386,7 @@ def note_custom_barcode_used(barcode: str) -> None:
 # SECTION: Internal Helpers
 # ============================================================
 
-def _log_event(cur, barcode, event_type, delta=0, source="ui"):
+def _log_event(cur, barcode, event_type, delta=0, source="ui", snapshot=None):
     """
     Writes to event_log table. If table doesn't exist for some reason,
     silently skip (keeps app alive). Returns the new event's id (used by
@@ -393,10 +395,10 @@ def _log_event(cur, barcode, event_type, delta=0, source="ui"):
     try:
         cur.execute(
             """
-            INSERT INTO event_log (created_at, barcode, event_type, delta, source)
-            VALUES (?, ?, ?, ?, ?);
+            INSERT INTO event_log (created_at, barcode, event_type, delta, source, snapshot)
+            VALUES (?, ?, ?, ?, ?, ?);
             """,
-            (_now_utc_iso(), barcode, event_type, int(delta), source),
+            (_now_utc_iso(), barcode, event_type, int(delta), source, snapshot),
         )
         return cur.lastrowid
     except Exception:
@@ -407,15 +409,16 @@ def _sync_grocery(cur, item_id, qty):
     """
     Keeps grocery_list in sync:
       - item excluded ("Include in Grocery List" OFF) => never on the list
+      - leftover (has a made_date) => never on the list
       - if qty <= 0 => ensure item is in grocery_list
       - if qty > 0  => remove from grocery_list
     Every write to grocery_list goes through here, so the include flag
     is enforced in one place.
     IMPORTANT: uses SAME cursor/transaction as caller to avoid DB locks.
     """
-    cur.execute("SELECT include_in_grocery FROM items WHERE id = ?;", (item_id,))
+    cur.execute("SELECT include_in_grocery, made_date FROM items WHERE id = ?;", (item_id,))
     row = cur.fetchone()
-    included = row is None or bool(row[0])
+    included = row is None or (bool(row[0]) and not row[1])
     if qty <= 0 and included:
         cur.execute(
             """
@@ -801,6 +804,7 @@ def get_grocery_list():
             FROM grocery_list g
             JOIN items i ON i.id = g.item_id
             WHERE i.include_in_grocery = 1
+              AND i.made_date IS NULL
             ORDER BY g.added_date DESC;
             """
         )
@@ -951,25 +955,126 @@ def remove_one(barcode: str):
         conn.close()
 
 
+def _item_snapshot(cur, item_id) -> str:
+    """The whole item row plus its alias barcodes, as JSON, so Undo can
+    put a deleted item back exactly as it was (same id and barcode, so
+    a printed label still scans). SELECT * keeps future columns too."""
+    cur.execute("SELECT * FROM items WHERE id = ?;", (item_id,))
+    item = dict(cur.fetchone())
+    try:
+        cur.execute("SELECT barcode, created_at FROM barcode_aliases WHERE item_id = ?;", (item_id,))
+        aliases = [dict(r) for r in cur.fetchall()]
+    except sqlite3.OperationalError:
+        aliases = []
+    return json.dumps({"item": item, "aliases": aliases})
+
+
+def _restore_snapshot(cur, snap):
+    """Re-inserts an item saved by _item_snapshot. Only columns that
+    still exist in items are written. Raises ValueError if its barcode
+    has been used by another item since."""
+    item = snap["item"]
+    cur.execute("SELECT 1 FROM items WHERE barcode = ?;", (item["barcode"],))
+    if cur.fetchone():
+        raise ValueError("Barcode in use again")
+    cur.execute("SELECT 1 FROM items WHERE id = ?;", (item.get("id"),))
+    if cur.fetchone():
+        item = {k: v for k, v in item.items() if k != "id"}  # never overwrite another row
+
+    cur.execute("PRAGMA table_info(items);")
+    existing = {r[1] for r in cur.fetchall()}
+    cols = [c for c in item if c in existing]
+    cur.execute(
+        f"INSERT INTO items ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)});",
+        [item[c] for c in cols],
+    )
+    item_id = cur.lastrowid
+    for a in snap.get("aliases") or []:
+        cur.execute(
+            "INSERT OR IGNORE INTO barcode_aliases (barcode, item_id, created_at) VALUES (?, ?, ?);",
+            (a["barcode"], item_id, a.get("created_at")),
+        )
+    return item_id
+
+
+def scan_out(barcode: str):
+    """
+    A Remove scan. Same as remove_one(), except a leftover (an item with
+    a made_date) that this scan takes to 0, or that is already at 0, is
+    deleted instead of kept at 0. That logs a "finish" event holding a
+    snapshot of the item, so Undo can restore it.
+    Returns {"event_id", "finished"}. Supports alias barcodes.
+    """
+    barcode = (barcode or "").strip()
+    if not barcode:
+        raise ValueError("Barcode required")
+
+    canonical = resolve_barcode(barcode)
+    if canonical:
+        barcode = canonical
+
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN IMMEDIATE;")
+        cur.execute("SELECT id, quantity, made_date FROM items WHERE barcode = ?;", (barcode,))
+        row = cur.fetchone()
+        if not row:
+            raise ValueError("Item not found")
+        if not row["made_date"] or row["quantity"] > 1:
+            conn.rollback()
+            return {"event_id": remove_one(barcode), "finished": False}
+
+        delta = -1 if row["quantity"] > 0 else 0
+        event_id = _log_event(cur, barcode, "finish", delta=delta, source="ui",
+                              snapshot=_item_snapshot(cur, row["id"]))
+        if not event_id:
+            # No undo record could be written, so don't delete anything.
+            conn.rollback()
+            return {"event_id": remove_one(barcode), "finished": False}
+
+        cur.execute("DELETE FROM grocery_list WHERE item_id = ?;", (row["id"],))
+        try:
+            cur.execute("DELETE FROM barcode_aliases WHERE item_id = ?;", (row["id"],))
+        except sqlite3.OperationalError:
+            pass
+        cur.execute("DELETE FROM items WHERE id = ?;", (row["id"],))
+
+        conn.commit()
+        return {"event_id": event_id, "finished": True}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 # ============================================================
-# SECTION: Undo (scan +1 / -1 tap)
+# SECTION: Undo (scan +1 / -1 tap / finished leftover)
 # ============================================================
 
 # The toast only offers Undo for ~10s; the server allows a bit longer
 # so a slow tap right at the end (or a slow Pi) still goes through.
 UNDO_WINDOW_SECONDS = 60
-UNDOABLE_EVENT_TYPES = ("add", "remove", "correct")
+UNDOABLE_EVENT_TYPES = ("add", "remove", "correct", "finish")
 
 
 def _undoable_event(cur, event_id):
     """Returns (event_row, item_row) if event_id can still be undone,
-    else raises ValueError with a user-facing reason."""
+    else raises ValueError with a user-facing reason. For a "finish"
+    the item was deleted, so item_row is None and the item comes from
+    the event's snapshot instead."""
     cur.execute(
-        "SELECT id, created_at, barcode, event_type, delta, undone_by FROM event_log WHERE id = ?;",
+        "SELECT id, created_at, barcode, event_type, delta, undone_by, snapshot FROM event_log WHERE id = ?;",
         (event_id,),
     )
     ev = cur.fetchone()
-    if not ev or ev["event_type"] not in UNDOABLE_EVENT_TYPES or not ev["delta"]:
+    if not ev or ev["event_type"] not in UNDOABLE_EVENT_TYPES:
+        raise ValueError("Nothing to undo")
+    if ev["event_type"] == "finish":
+        if not ev["snapshot"]:
+            raise ValueError("Nothing to undo")
+    elif not ev["delta"]:
         raise ValueError("Nothing to undo")
     if ev["undone_by"] is not None:
         raise ValueError("Already undone")
@@ -982,14 +1087,19 @@ def _undoable_event(cur, event_id):
 
     cur.execute("SELECT id, name, quantity FROM items WHERE barcode = ?;", (ev["barcode"],))
     item = cur.fetchone()
+    if ev["event_type"] == "finish":
+        if item:
+            raise ValueError("Barcode in use again")
+        return ev, None
     if not item:
         raise ValueError("Item no longer exists")
     return ev, item
 
 
 def get_undo_offer(event_id):
-    """For rendering the Undo toast: {"name", "delta"} if event_id is
-    still undoable, else None (so a stale ?undo= link shows nothing)."""
+    """For rendering the Undo toast: {"name", "delta", "finished"} if
+    event_id is still undoable, else None (so a stale ?undo= link shows
+    nothing)."""
     try:
         event_id = int(event_id)
     except (TypeError, ValueError):
@@ -997,7 +1107,10 @@ def get_undo_offer(event_id):
     conn = _connect()
     try:
         ev, item = _undoable_event(conn.cursor(), event_id)
-        return {"name": item["name"], "delta": ev["delta"]}
+        if ev["event_type"] == "finish":
+            name = json.loads(ev["snapshot"])["item"]["name"]
+            return {"name": name, "delta": ev["delta"], "finished": True}
+        return {"name": item["name"], "delta": ev["delta"], "finished": False}
     except (ValueError, sqlite3.OperationalError):
         return None
     finally:
@@ -1010,6 +1123,7 @@ def undo_event(event_id):
     delta, floor 0), rather than restoring an absolute old quantity —
     so a scan that happened in between isn't clobbered. Logs an "undo"
     event and marks the original undone so it can't be undone twice.
+    Undoing a "finish" re-inserts the deleted leftover from its snapshot.
     Returns {"name", "delta", "qty"}; raises ValueError if not undoable.
     """
     event_id = int(event_id)
@@ -1020,6 +1134,16 @@ def undo_event(event_id):
         # "not undone yet" check before either marks it.
         cur.execute("BEGIN IMMEDIATE;")
         ev, item = _undoable_event(cur, event_id)
+
+        if ev["event_type"] == "finish":
+            snap = json.loads(ev["snapshot"])
+            item_id = _restore_snapshot(cur, snap)
+            qty = int(snap["item"].get("quantity") or 0)
+            _sync_grocery(cur, item_id, qty)
+            undo_id = _log_event(cur, ev["barcode"], "undo", delta=-int(ev["delta"]), source="ui")
+            cur.execute("UPDATE event_log SET undone_by = ? WHERE id = ?;", (undo_id or -1, ev["id"]))
+            conn.commit()
+            return {"name": snap["item"]["name"], "delta": -int(ev["delta"]), "qty": qty}
 
         new_qty = max(item["quantity"] - ev["delta"], 0)
         applied = new_qty - item["quantity"]
@@ -1484,14 +1608,15 @@ def get_event_log(limit=200):
         conn.close()
 
 
-RECENT_CHANGE_TYPES = ("add_new", "add", "remove", "undo", "edit", "correct", "grocery_on", "grocery_off")
+RECENT_CHANGE_TYPES = ("add_new", "add", "remove", "undo", "edit", "correct", "grocery_on", "grocery_off", "finish")
 
 
 def get_recent_changes(limit=10):
     """Latest inventory changes for the Inventory page: scans (+1, new
-    items), -1 taps, undos and edits. Item name comes from items (None
-    if the item has since been deleted); created_at is converted to
-    local time for display."""
+    items), -1 taps, finished leftovers, undos and edits. Item name comes
+    from items, else from a "finish" snapshot (None if the item has since
+    been deleted some other way); created_at is converted to local time
+    for display."""
     conn = _connect()
     try:
         cur = conn.cursor()
@@ -1499,7 +1624,7 @@ def get_recent_changes(limit=10):
         try:
             cur.execute(
                 f"""
-                SELECT e.id, e.created_at, e.barcode, e.event_type, e.delta, e.undone_by, i.name
+                SELECT e.id, e.created_at, e.barcode, e.event_type, e.delta, e.undone_by, e.snapshot, i.name
                 FROM event_log e
                 LEFT JOIN items i ON i.barcode = e.barcode
                 WHERE e.event_type IN ({placeholders})
@@ -1511,7 +1636,17 @@ def get_recent_changes(limit=10):
             rows = cur.fetchall()
         except sqlite3.OperationalError:
             return []
-        return [dict(r, created_at=to_local_display(r["created_at"])) for r in rows]
+        changes = []
+        for r in rows:
+            ch = dict(r, created_at=to_local_display(r["created_at"]))
+            snapshot = ch.pop("snapshot")
+            if not ch["name"] and snapshot:
+                try:
+                    ch["name"] = json.loads(snapshot)["item"]["name"]
+                except (ValueError, KeyError, TypeError):
+                    pass
+            changes.append(ch)
+        return changes
     finally:
         conn.close()
 

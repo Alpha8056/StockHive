@@ -100,7 +100,7 @@ def _tagged_items(aliases=None):
     try:
         cur = conn.cursor()
         cur.execute("""
-            SELECT i.id, i.barcode, i.name, i.quantity, i.include_in_grocery, i.ingredient,
+            SELECT i.id, i.barcode, i.name, i.quantity, i.include_in_grocery, i.made_date, i.ingredient,
                    (g.item_id IS NOT NULL) AS on_list
             FROM items i LEFT JOIN grocery_list g ON g.item_id = i.id
             WHERE i.ingredient IS NOT NULL AND i.ingredient != '';
@@ -482,7 +482,8 @@ def add_missing_to_grocery(recipe_id: int, matched: dict) -> dict:
                 continue
             name = line["ingredient"]
             items = by_key.get(line["key"], [])
-            included = [i for i in items if int(i["include_in_grocery"])]
+            # Leftovers (made_date set) never go on the grocery list.
+            included = [i for i in items if int(i["include_in_grocery"]) and not i["made_date"]]
             if any(i["on_list"] for i in included):
                 result["already"].append(name)
             elif included:

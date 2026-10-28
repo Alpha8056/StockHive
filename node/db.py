@@ -288,6 +288,8 @@ def _migrate(conn):
     # fresh installs, so only pre-existing tables need adding to).
     if _table_exists(conn, "event_log"):
         _ensure_column(conn, "event_log", "undone_by", "undone_by INTEGER")
+        # JSON copy of a deleted item, so Undo can restore a finished leftover.
+        _ensure_column(conn, "event_log", "snapshot", "snapshot TEXT")
 
     # Ensure events table exists
     _ensure_events_table(conn)
