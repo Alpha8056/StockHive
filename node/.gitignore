@@ -10,6 +10,11 @@ venv/
 
 # Databases / local data
 *.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.db.before-restore
+*.restore.tmp
 *.sqlite
 *.sqlite3
 

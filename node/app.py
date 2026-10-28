@@ -8,9 +8,10 @@ import subprocess
 import sys
 import threading
 import time
-import shutil
 import io
 import socket
+import sqlite3
+import tempfile
 import zipfile
 from datetime import date, datetime, timedelta, timezone
 from html import escape
@@ -3550,6 +3551,83 @@ def _last_auto_backup_html() -> str:
     return f'<div class="muted" style="{style}">{text} <span style="color:var(--ok);">✓</span></div>'
 
 
+# ------------------------------------------------------------
+# SUBSECTION: Consistent database copies (backup + restore)
+# The database runs in WAL mode, so recent changes can sit in
+# inventory.db-wal until SQLite folds them into inventory.db. Copying or
+# overwriting the file directly can miss them, catch it mid-write, or (on
+# restore) leave an old -wal applying stale pages to the new file. Every
+# copy here goes through SQLite's own backup function instead.
+# ------------------------------------------------------------
+BEFORE_RESTORE_PATH = os.path.join(BASE_DIR, "inventory.db.before-restore")
+
+
+def _remove_sqlite_files(path: str) -> None:
+    for p in (path, path + "-wal", path + "-shm", path + "-journal"):
+        try:
+            os.remove(p)
+        except FileNotFoundError:
+            pass
+
+
+def _sqlite_copy(src_path: str, dest_path: str) -> None:
+    """A complete, consistent copy of src_path (including anything still
+    in its WAL) as one standalone file at dest_path, replacing it.
+
+    One backup step on purpose: in WAL mode it only holds a read snapshot,
+    so scans and edits keep writing meanwhile. Small steps would let a
+    write in between restart the copy, possibly over and over."""
+    _remove_sqlite_files(dest_path)
+    src = sqlite3.connect(src_path, timeout=10)
+    try:
+        dst = sqlite3.connect(dest_path)
+        try:
+            src.backup(dst)
+            dst.execute("PRAGMA journal_mode=DELETE;")   # no -wal needed alongside the copy
+        finally:
+            dst.close()
+    finally:
+        src.close()
+
+
+def _check_backup_db(path: str) -> None:
+    """Raises ValueError unless path is an intact SQLite database with
+    StockHive's items table. Run before anything live is replaced."""
+    try:
+        conn = sqlite3.connect(path)
+        try:
+            intact = conn.execute("PRAGMA quick_check;").fetchone()[0] == "ok"
+            has_items = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'items';").fetchone()
+        finally:
+            conn.close()
+    except sqlite3.DatabaseError:
+        intact, has_items = False, None
+    if not intact or not has_items:
+        raise ValueError("That file isn't a StockHive backup")
+
+
+def _load_into_live_db(src_path: str) -> None:
+    """Replaces the live database's contents with src_path through SQLite,
+    under its own locks, so the live WAL is handled properly and every
+    connection opened afterwards sees the restored data. A WAL-mode file
+    can't change page size, so only a backup with a different page size
+    switches the live file out of WAL mode first (which needs it to be
+    idle); inventory.py's connections turn WAL back on."""
+    src = sqlite3.connect(src_path)
+    try:
+        dst = sqlite3.connect(DB_PATH, timeout=10)
+        try:
+            # fetchall() so each PRAGMA finishes: SQLite won't change the
+            # journal mode while a statement on this connection is open.
+            if src.execute("PRAGMA page_size;").fetchall() != dst.execute("PRAGMA page_size;").fetchall():
+                dst.execute("PRAGMA journal_mode=DELETE;").fetchall()
+            src.backup(dst)
+        finally:
+            dst.close()
+    finally:
+        src.close()
+
+
 @app.route("/backup")
 def backup_db():
     if not os.path.exists(DB_PATH):
@@ -3558,15 +3636,21 @@ def backup_db():
     # Bundled as a zip (db + photos) rather than the raw .db file alone —
     # item photos live on disk under static/photos/, not in the database,
     # so a db-only backup would silently lose them.
+    fd, snapshot = tempfile.mkstemp(prefix="stockhive-backup-", suffix=".db")
+    os.close(fd)
     buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.write(DB_PATH, "inventory.db")
-        if os.path.isdir(photos.PHOTOS_DIR):
-            for root, _dirs, files in os.walk(photos.PHOTOS_DIR):
-                for fname in files:
-                    full_path = os.path.join(root, fname)
-                    arcname = "photos/" + os.path.relpath(full_path, photos.PHOTOS_DIR).replace(os.sep, "/")
-                    zf.write(full_path, arcname)
+    try:
+        _sqlite_copy(DB_PATH, snapshot)
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.write(snapshot, "inventory.db")
+            if os.path.isdir(photos.PHOTOS_DIR):
+                for root, _dirs, files in os.walk(photos.PHOTOS_DIR):
+                    for fname in files:
+                        full_path = os.path.join(root, fname)
+                        arcname = "photos/" + os.path.relpath(full_path, photos.PHOTOS_DIR).replace(os.sep, "/")
+                        zf.write(full_path, arcname)
+    finally:
+        _remove_sqlite_files(snapshot)
     buf.seek(0)
     # Only the nightly backup script counts as "automatic" — this records
     # that the zip was served, not that the backup machine saved it.
@@ -3614,14 +3698,16 @@ def _copy_capped(src, dst, budget: list) -> None:
         dst.write(chunk)
 
 
-def _restore_from_zip(zip_path: str) -> None:
+def _restore_from_zip(zip_path: str, staged_db_path: str) -> None:
     """
-    Extracts inventory.db and photos/ from a bundled backup made by
-    backup_db(). Only those two things are ever extracted — every other
-    entry in the zip is ignored outright — each resolved destination is
-    confirmed to stay inside its target directory (zip-slip defense),
-    and the total bytes written is capped so a crafted archive can't
-    fill the disk.
+    From a bundled backup made by backup_db(): extracts inventory.db to
+    staged_db_path and checks it's a real StockHive database, then
+    extracts photos/. The live database isn't touched here; restore_db()
+    loads the staged copy afterwards. Only those two things are ever
+    extracted — every other entry in the zip is ignored outright — each
+    resolved photo destination is confirmed to stay inside its target
+    directory (zip-slip defense), and the total bytes written is capped
+    so a crafted archive can't fill the disk.
     """
     with zipfile.ZipFile(zip_path) as zf:
         infos = zf.infolist()
@@ -3629,27 +3715,27 @@ def _restore_from_zip(zip_path: str) -> None:
         if "inventory.db" not in names:
             raise ValueError("Backup zip is missing inventory.db")
 
-        wanted = [
+        db_info = next(info for info in infos if info.filename == "inventory.db")
+        photo_infos = [
             info for info in infos
-            if info.filename == "inventory.db"
-            or (info.filename.startswith("photos/") and not info.filename.endswith("/"))
+            if info.filename.startswith("photos/") and not info.filename.endswith("/")
         ]
 
         # Upfront check against the zip's own declared sizes, so an
         # obviously-oversized backup is rejected before writing anything.
-        if sum(info.file_size for info in wanted) > RESTORE_MAX_TOTAL_BYTES:
+        if db_info.file_size + sum(info.file_size for info in photo_infos) > RESTORE_MAX_TOTAL_BYTES:
             raise ValueError("Backup is too large to restore")
 
         budget = [RESTORE_MAX_TOTAL_BYTES]
 
-        for info in wanted:
-            if info.filename == "inventory.db":
-                dest_path = DB_PATH
-            else:
-                rel = info.filename[len("photos/"):]
-                dest_path = _safe_member_path(photos.PHOTOS_DIR, rel)
-                os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        with zf.open(db_info) as src, open(staged_db_path, "wb") as dst:
+            _copy_capped(src, dst, budget)
+        _check_backup_db(staged_db_path)      # before any photo is written
 
+        for info in photo_infos:
+            rel = info.filename[len("photos/"):]
+            dest_path = _safe_member_path(photos.PHOTOS_DIR, rel)
+            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
             with zf.open(info) as src, open(dest_path, "wb") as dst:
                 _copy_capped(src, dst, budget)
 
@@ -3665,17 +3751,10 @@ def restore_db():
     except Exception:
         return redirect("/tools?msgtype=danger&msg=Upload%20failed")
 
-    try:
-        if os.path.getsize(UPLOAD_TMP) < 4:
-            os.remove(UPLOAD_TMP)
-            return redirect("/tools?msgtype=danger&msg=Uploaded%20file%20looks%20invalid")
-    except Exception:
-        pass
-
-    # A bundled backup from this version's /backup is a zip; a backup
-    # from before photos existed is the raw inventory.db file. Sniffed by
-    # magic bytes, not the uploaded filename/extension, since browsers
-    # don't reliably preserve either.
+    # A bundled backup from /backup is a zip; a backup from before photos
+    # existed is the raw inventory.db file. Sniffed by magic bytes, not
+    # the uploaded filename/extension, since browsers don't reliably
+    # preserve either.
     is_zip = False
     try:
         with open(UPLOAD_TMP, "rb") as fh:
@@ -3683,15 +3762,19 @@ def restore_db():
     except Exception:
         pass
 
+    staged = UPLOAD_TMP + ".db"
     try:
         if is_zip:
-            _restore_from_zip(UPLOAD_TMP)
+            _restore_from_zip(UPLOAD_TMP, staged)
+            backup_db_path = staged
         else:
-            if os.path.getsize(UPLOAD_TMP) < 1000:
-                os.remove(UPLOAD_TMP)
-                return redirect("/tools?msgtype=danger&msg=Uploaded%20file%20looks%20invalid")
-            shutil.copy2(UPLOAD_TMP, DB_PATH)
-        os.remove(UPLOAD_TMP)
+            _check_backup_db(UPLOAD_TMP)
+            backup_db_path = UPLOAD_TMP
+        # Undo point: a consistent copy of the data about to be replaced,
+        # overwriting the one from the previous restore.
+        if os.path.exists(DB_PATH):
+            _sqlite_copy(DB_PATH, BEFORE_RESTORE_PATH)
+        _load_into_live_db(backup_db_path)
         # A backup from an older install can be missing tables/columns
         # this version added (e.g. node_settings, items.photo) — every
         # page reads from those on every request, so re-running the
@@ -3699,12 +3782,17 @@ def restore_db():
         # keeps the app from 500ing on the very next page load after a
         # restore.
         _db.init_db()
+    except (ValueError, zipfile.BadZipFile) as e:
+        detail = str(e) if isinstance(e, ValueError) else "That file isn't a valid backup zip"
+        return redirect(_with_status("/tools", f"Restore failed: {detail}. Your inventory wasn't changed.", "danger"))
     except Exception:
-        if os.path.exists(UPLOAD_TMP):
-            os.remove(UPLOAD_TMP)
         return redirect("/tools?msgtype=danger&msg=Restore%20failed")
+    finally:
+        _remove_sqlite_files(UPLOAD_TMP)
+        _remove_sqlite_files(staged)
 
     msg = "Restore complete" if is_zip else "Restore complete (older backup format has no photos to restore)"
+    msg += ". The data it replaced is saved as inventory.db.before-restore in the node folder, in case you need to undo it."
     return redirect(f"/tools?msgtype=ok&msg={_u(msg)}")
 
 

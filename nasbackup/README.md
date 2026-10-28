@@ -66,6 +66,9 @@ systemctl list-timers stockhive-backup.timer                                 # n
 **Through the node (easiest):** open the node, go to **Tools > Restore**, choose
 the `.zip` and upload it. This replaces that node's inventory and photos.
 
+Restore checks the file first. If it isn't a StockHive backup, it stops and your
+inventory isn't changed.
+
 **From the command line:**
 
 ```bash
@@ -74,6 +77,25 @@ curl -F "dbfile=@Kitchen-Inventory_2026-01-31.zip" http://<node-address>/restore
 
 **Onto a new node:** install the node with `setup.sh`, then restore the zip as
 above. The zip is the whole node: its database plus photos.
+
+### Undo a restore
+
+Before it replaces anything, a restore saves the data it's about to replace as
+`inventory.db.before-restore` in the node folder, next to `inventory.db`. Each restore
+overwrites that file, so only the most recent restore can be undone.
+
+To undo it, on the node's machine:
+
+```bash
+sudo systemctl stop stockpi-node
+cd ~/StockHive/node          # your node folder
+cp inventory.db.before-restore inventory.db
+rm -f inventory.db-wal inventory.db-shm
+sudo systemctl start stockpi-node
+```
+
+This brings back the database (items, lists, settings, recipes). Photos the restore
+added or replaced stay as they are.
 
 ### Large backups
 
