@@ -158,7 +158,7 @@ def _run(port: int) -> None:
         try:
             _check(port)
         except Exception as e:
-            print("[mDNS] Address check failed:", e)
+            print("[mDNS] Address check failed:", e, flush=True)
         starting = _registered_ip is None and time.monotonic() < startup_deadline
         time.sleep(STARTUP_RETRY_SECONDS if starting else CHECK_INTERVAL_SECONDS)
 
@@ -186,15 +186,15 @@ def _check(port: int) -> None:
             elif network_up:
                 _start_zeroconf(port, detected, detected)
             elif not _waiting_logged:
-                print(f"[mDNS] Waiting for network (detected {detected})…")
+                print(f"[mDNS] Waiting for network (detected {detected})…", flush=True)
                 _waiting_logged = True
             return
 
         if network_up and detected != _zc_lan_ip:
             if override:
-                print(f"[mDNS] Network address changed {_zc_lan_ip} -> {detected}; re-announcing {override}")
+                print(f"[mDNS] Network address changed {_zc_lan_ip} -> {detected}; re-announcing {override}", flush=True)
             else:
-                print(f"[mDNS] Address changed {_zc_lan_ip} -> {detected}")
+                print(f"[mDNS] Address changed {_zc_lan_ip} -> {detected}", flush=True)
             _restart_zeroconf(port, override or detected, detected)
         elif _registered_ip is None and (override or network_up):
             # An earlier registration attempt failed; try again.
@@ -210,7 +210,7 @@ def _start_zeroconf(port: int, ip: str, lan_ip: str) -> None:
     try:
         _zc = Zeroconf()
     except Exception as e:
-        print("[mDNS] Failed to start Zeroconf:", e)
+        print("[mDNS] Failed to start Zeroconf:", e, flush=True)
         return
     _zc_lan_ip = lan_ip
 
@@ -219,14 +219,14 @@ def _start_zeroconf(port: int, ip: str, lan_ip: str) -> None:
         _zc.register_service(info)
         _service_info = info
         _registered_ip = ip
-        print(f"[mDNS] Advertising {ip}:{port}")
+        print(f"[mDNS] Advertising {ip}:{port}", flush=True)
     except Exception as e:
-        print("[mDNS] Failed to advertise this node:", e)
+        print("[mDNS] Failed to advertise this node:", e, flush=True)
 
     try:
         _browser = ServiceBrowser(_zc, LAUNCHER_SERVICE_TYPE, _LauncherListener())
     except Exception as e:
-        print("[mDNS] Failed to start browsing for the launcher:", e)
+        print("[mDNS] Failed to start browsing for the launcher:", e, flush=True)
 
 
 def _stop_zeroconf() -> None:
@@ -239,7 +239,7 @@ def _stop_zeroconf() -> None:
         try:
             zc.close()
         except Exception as e:
-            print("[mDNS] Failed to close Zeroconf:", e)
+            print("[mDNS] Failed to close Zeroconf:", e, flush=True)
 
 
 def _restart_zeroconf(port: int, ip: str, lan_ip: str) -> None:
@@ -275,7 +275,7 @@ def refresh() -> None:
             _zc.register_service(_service_info)
             _registered_ip = ip
         except Exception as e:
-            print("[mDNS] Failed to refresh advertisement:", e)
+            print("[mDNS] Failed to refresh advertisement:", e, flush=True)
 
 
 def get_launcher_url() -> str:
