@@ -296,6 +296,63 @@ def _migrate(conn):
     _ensure_node_settings_table(conn)
     _seed_node_id(conn)
 
+    _ensure_recipe_tables(conn)
+
+
+# ------------------------------------------------------------
+# SUBSECTION: Recipes (Settings > Recipes)
+# ------------------------------------------------------------
+def _ensure_recipe_tables(conn):
+    """Recipes, their ingredient lines, and free-text Grocery List lines
+    added from a recipe for ingredients no item is tagged with.
+
+    source/external_id/image_url/source_url are for recipes imported
+    later (e.g. TheMealDB): source is 'local' for recipes typed in here,
+    and the unique index stops the same external recipe being imported
+    twice. Deleting a recipe deletes its lines in code (see recipes.py),
+    because not every connection here turns on SQLite foreign keys."""
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS recipes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            meal_type TEXT NOT NULL DEFAULT 'Supper',
+            servings TEXT,
+            instructions TEXT,
+            notes TEXT,
+            source TEXT NOT NULL DEFAULT 'local',
+            external_id TEXT,
+            image_url TEXT,
+            source_url TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+    cur.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_recipes_source_external
+        ON recipes(source, external_id) WHERE external_id IS NOT NULL;
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS recipe_ingredients (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            recipe_id INTEGER NOT NULL REFERENCES recipes(id),
+            position INTEGER NOT NULL DEFAULT 0,
+            amount TEXT,
+            ingredient TEXT NOT NULL
+        );
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_recipe_ingredients_recipe ON recipe_ingredients(recipe_id);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_recipe_ingredients_ingredient ON recipe_ingredients(ingredient);")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS grocery_extras (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            text TEXT NOT NULL UNIQUE,
+            added_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            recipe_id INTEGER
+        );
+    """)
+    conn.commit()
+
 # ============================================================
 # SECTION: Public Entry
 # ============================================================

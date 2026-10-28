@@ -46,7 +46,9 @@ Something not working? See [Troubleshooting](TROUBLESHOOTING.md).
 | Dim the kitchen screen at night | [12. The kiosk screen](#12-the-kiosk-screen) |
 | Put StockHive on my phone's home screen | [13. Using it on a phone](#13-using-it-on-a-phone) |
 | Hide, restore or delete a node on the launcher | [14. Managing nodes](#14-managing-nodes) |
-| Tag items with ingredient names for recipes | [15. Ingredients (for recipes)](#15-ingredients-for-recipes) |
+| Tag items with ingredient names for recipes | [15. Ingredients and recipes](#15-ingredients-and-recipes) |
+| See which recipes I can make with what I have | [15. Ingredients and recipes](#15-ingredients-and-recipes) |
+| Add a recipe's missing ingredients to the grocery list | [15. Ingredients and recipes](#15-ingredients-and-recipes) |
 
 ---
 
@@ -305,8 +307,8 @@ To open it, go to **Tools**, then **Open Settings**.
   Tap **Save**.
 - **Page Labels:** rename the wording to suit what this node tracks. For example, change
   **Grocery List** to "Part List" for a parts node. Tap **Save Labels**.
-- **Recipes:** turn on ingredient tags for this node. See
-  [15. Ingredients (for recipes)](#15-ingredients-for-recipes).
+- **Recipes:** turn on ingredient tags and recipes for this node, and set your **Staples**.
+  See [15. Ingredients and recipes](#15-ingredients-and-recipes).
 
 The other cards (**Advertised Address**, **Launcher**, **Labels & Printer**,
 **Admin Token**, **Device**) are for setup and updates. See [README.md](../README.md)
@@ -436,11 +438,11 @@ are explained in [README.md](../README.md#admin-token-updates-restart-shutdown).
 
 ---
 
-## 15. Ingredients (for recipes)
+## 15. Ingredients and recipes
 
-**What it's for:** giving each food item a simple ingredient name, like "milk", "eggs" or
-"cheddar", so recipes can be matched to what you have. Product names like
-"Great Value 2% Milk 1 gal" are too specific for that.
+**What it's for:** keeping your own recipes, and seeing which ones you can make with
+what's in stock. For that, each food item gets a simple ingredient name, like "milk",
+"eggs" or "cheddar". Product names like "Great Value 2% Milk 1 gal" are too specific.
 
 ### Turn it on
 
@@ -450,7 +452,7 @@ never show it.
 1. Go to **Tools**, then **Open Settings**.
 2. On the **Recipes** card, turn on **Recipes** and tap **Save**.
 
-Turning it off again hides everything below. Tags you've already added are kept.
+Turning it off again hides everything below. Tags and recipes you've already added are kept.
 
 ### Tag one item
 
@@ -483,4 +485,59 @@ Saved items drop off the list.
 
 While Recipes is on, searching **Inventory** (or the launcher) for an ingredient name, like
 "eggs", also finds items tagged with it.
+
+### Staples
+
+Staples are basics you always have and don't scan, like salt. A recipe never lists a staple
+as missing. The starting list is salt, pepper, water and oil.
+
+To change it, go to **Settings**, find the **Recipes** card, edit **Staples** (names separated
+by commas) and tap **Save**. Names must match exactly, so if your recipes say "olive oil",
+add "olive oil" too.
+
+### The Recipes page
+
+Tap **Recipes** on the home page.
+
+- Tabs at the top show **All** recipes, or just **Breakfast**, **Lunch**, **Supper**, **Side**
+  or **Snack**.
+- Recipes you can make right now come first, marked **Can make now**. After them come the
+  ones missing the fewest ingredients.
+- Each recipe shows how many ingredients you have, like **3 of 5 ingredients**.
+- **Uses expiring** means it uses something from **Expiring Soon**, so it's a good one to
+  make first.
+- Use the search box to find a recipe by its name or by an ingredient.
+
+An ingredient counts as "have" when an item tagged with it has a quantity of 1 or more.
+Singular and plural count as the same, so "egg" in a recipe matches an item tagged "eggs".
+
+### Add or edit a recipe
+
+1. On the **Recipes** page, tap **Add recipe**. To change one, open it and tap **Edit**.
+2. Type the **Recipe name**, tap a **Meal** type, and add **Servings** if you like.
+3. Under **Ingredients**, each row has an **Amount** (optional, like "2 cups") and an
+   ingredient name. Names from your items and other recipes are suggested as you type.
+   Pick one when it fits, so it matches your items.
+4. Tap **+ Add ingredient** for another row, or **✕** to remove one. Empty rows are ignored.
+5. Type the **Instructions**, one step per line, and any **Notes**.
+6. Tap **Save recipe**.
+
+To delete a recipe, open it and tap **Delete recipe** at the bottom.
+
+### One recipe
+
+Opening a recipe shows each ingredient marked **Have**, **Staple** or **Missing**, then the
+instructions.
+
+**Add missing to Grocery List** puts what you're missing on your grocery list:
+
+- If one of your items is tagged with that ingredient, it's already on the list by itself
+  (it's at 0). An item set to stay off the list (see
+  [6. Editing an item](#6-editing-an-item)) is left off.
+- If no item is tagged with it, it's added to the list as a plain line, marked
+  **from a recipe**. It disappears by itself once an item tagged with that ingredient is in
+  stock, or you can tap **Remove**.
+
+These lines are on the exported and printed list too, and they stay on the list even if you
+turn Recipes off later.
 

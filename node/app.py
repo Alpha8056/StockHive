@@ -27,6 +27,7 @@ import mdns_advertise
 import identity
 import photos
 import label_printer
+import recipes
 
 class PrefixMiddleware:
     def __init__(self, app):
@@ -988,6 +989,7 @@ def home():
         <a class="btn btn-wide" href="/move?zone={_u(zone)}&shelf={shelf}">Move Location</a>
         <a class="btn btn-wide" href="/inventory">Inventory</a>
         <a class="btn btn-wide" href="/grocery-list">{_h(labels.get_labels()['grocery_low_stock'])}</a>
+        {'<a class="btn btn-wide" href="/recipes">Recipes</a>' if labels.get_recipes_enabled() else ''}
         <a class="btn btn-wide" href="/tools">Tools</a>
       </div>
 
@@ -1860,6 +1862,379 @@ def edit_item_page():
 
 
 # ------------------------------------------------------------
+# SUBSECTION: Recipes (Settings > Recipes)
+# Storage and matching live in recipes.py; these are the pages.
+# ------------------------------------------------------------
+def _staples_field_html() -> str:
+    return f"""
+          <div class="fieldRow" style="margin-top:10px;">
+            <label class="muted" style="min-width:110px;" for="stapleInput">Staples</label>
+            <input type="text" id="stapleInput" name="recipe_staples" value="{_h(', '.join(recipes.get_staples()))}" placeholder="salt, pepper, water, oil">
+          </div>
+          <div class="muted" style="margin-top:6px;">Basics you always have, separated by commas. Recipes never list them as missing. Names must match exactly, so add "olive oil" too if your recipes use it.</div>
+    """
+
+
+def _recipes_off_redirect():
+    if not labels.get_recipes_enabled():
+        return redirect(_with_status("/", "Turn on Recipes in Settings first", "warn"))
+    return None
+
+
+def _recipe_css() -> str:
+    return """
+    <style>
+      .tabs{ display:flex; flex-wrap:wrap; gap:8px; margin:6px 0 12px 0; }
+      .tabs .btn{ min-height:44px; }
+      .tabs .btn.on{ border-color:var(--ok); color:var(--ok); }
+      .rcard{ display:block; color:inherit; text-decoration:none; padding:14px 4px; border-bottom:1px solid var(--border); }
+      .rcard:last-child{ border-bottom:none; }
+      .rcard:hover{ background:rgba(255,255,255,0.03); }
+      .rname{ font-size:18px; font-weight:800; }
+      .badge{ display:inline-block; padding:3px 10px; margin:6px 6px 0 0; border-radius:999px; border:1px solid currentColor;
+              font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:.04em; }
+      .b-ok{ color:var(--ok); } .b-warn{ color:var(--warn); } .b-miss{ color:var(--danger); } .b-muted{ color:var(--muted); }
+      .ingLine{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:10px 0; border-bottom:1px solid var(--border); }
+      .ingLine:last-child{ border-bottom:none; }
+      .ingAmt{ color:var(--muted); min-width:5em; }
+      .steps{ white-space:pre-wrap; line-height:1.5; }
+      .mealPick{ display:flex; flex-wrap:wrap; gap:8px; }
+      .mealPick label{ position:relative; }
+      .mealPick input{ position:absolute; opacity:0; width:1px; height:1px; }
+      .mealPick span{ display:inline-flex; align-items:center; min-height:44px; padding:0 16px; border-radius:12px;
+                      border:1px solid var(--border); background:var(--btn); cursor:pointer; font-weight:700; }
+      .mealPick input:checked + span{ border-color:var(--ok); color:var(--ok); }
+      .mealPick input:focus-visible + span{ box-shadow:0 0 0 3px rgba(90,162,255,0.35); }
+      .ingRow{ display:grid; grid-template-columns:minmax(5.5em,8em) 1fr 48px; gap:8px; margin:8px 0; align-items:center; }
+      .ingRow input[type=text]{ width:100%; font-size:16px; }
+      .ingRow .btn{ min-height:44px; padding:0; }
+      .recipeForm input[type=text], .recipeForm textarea{ width:100%; font-size:16px; }
+      .recipeForm textarea{ min-height:140px; padding:12px; border-radius:14px; border:1px solid var(--border);
+                            background:var(--input); color:var(--text); font-family:inherit; }
+      .formLabel{ display:block; color:var(--muted); font-size:14px; margin:16px 0 8px 0; }
+    </style>
+    """
+
+
+def _recipe_badges(m: dict) -> str:
+    out = ""
+    if m["can_make"]:
+        out += '<span class="badge b-ok">Can make now</span>'
+    if m["uses_expiring"]:
+        out += '<span class="badge b-warn">Uses expiring</span>'
+    return out
+
+
+@app.route("/recipes")
+def recipes_page():
+    off = _recipes_off_redirect()
+    if off:
+        return off
+    meal = request.args.get("meal", "All")
+    if meal not in ("All", *recipes.MEAL_TYPES):
+        meal = "All"
+    q = (request.args.get("q", "") or "").strip().lower()[:100]
+    q_key = recipes.ingredient_key(q) if q else None
+
+    ctx = recipes.stock_context(row[0] for row in get_expiring_items(EXPIRATION_WARN_DAYS))
+    shown = []
+    for r in recipes.list_recipes():
+        if meal != "All" and r["meal_type"] != meal:
+            continue
+        if q and q not in r["name"].lower() and not any(
+                q in l["ingredient"] or recipes.ingredient_key(l["ingredient"]) == q_key for l in r["lines"]):
+            continue
+        shown.append((r, recipes.match_recipe(r, ctx)))
+    # "Can make now" first, then fewest missing, then by name.
+    shown.sort(key=lambda rm: (not rm[1]["can_make"], rm[1]["missing"], rm[0]["name"].lower()))
+
+    def tab(name):
+        current = name == meal
+        cls = "btn on" if current else "btn"
+        qs = f"?meal={_u(name)}" + (f"&q={_u(q)}" if q else "")
+        aria = ' aria-current="page"' if current else ""
+        return f'<a class="{cls}" href="/recipes{qs}"{aria}>{_h(name)}</a>'
+
+    cards = "".join(
+        f"""
+        <a class="rcard" href="/recipes/{int(r['id'])}">
+          <div class="rname">{_h(r['name'])}</div>
+          <div class="muted">{_h(r['meal_type'])} &middot; {m['have']} of {m['total']} ingredient{'' if m['total'] == 1 else 's'}</div>
+          <div>{_recipe_badges(m)}</div>
+        </a>
+        """
+        for r, m in shown
+    ) or f'<div class="muted">{"No recipes match." if (q or meal != "All") else "No recipes yet. Tap Add recipe to make your first one."}</div>'
+
+    return f"""
+    {_styles()}{_auto_hide_banner_js()}{_recipe_css()}
+    <div class="wrap"><div class="container">
+      <header>
+        <div><h1>Recipes</h1><div class="sub">What you can make with what you have</div></div>
+        <div class="fieldRow">
+          <a class="btn" href="/">Home</a>
+          <a class="btn btn-warn" href="/recipes/new">Add recipe</a>
+        </div>
+      </header>
+      {_page_status_html()}
+      <div class="card">
+        <div class="tabs">{"".join(tab(n) for n in ("All", *recipes.MEAL_TYPES))}</div>
+        <form method="get" action="/recipes" class="fieldRow">
+          <input type="hidden" name="meal" value="{_h(meal)}">
+          <input type="text" name="q" value="{_h(q)}" placeholder="Search recipes or ingredients">
+          <button class="btn" type="submit">Search</button>
+          {f'<a class="btn" href="/recipes?meal={_u(meal)}">Clear</a>' if q else ''}
+        </form>
+      </div>
+      <div class="card">{cards}</div>
+    </div></div>
+    """
+
+
+@app.route("/recipes/<int:recipe_id>")
+def recipe_page(recipe_id):
+    off = _recipes_off_redirect()
+    if off:
+        return off
+    r = recipes.get_recipe(recipe_id)
+    if not r:
+        return redirect(_with_status("/recipes", "Recipe not found", "danger"))
+    ctx = recipes.stock_context(row[0] for row in get_expiring_items(EXPIRATION_WARN_DAYS))
+    m = recipes.match_recipe(r, ctx)
+
+    label = {"have": ("Have", "b-ok"), "staple": ("Staple", "b-muted"), "missing": ("Missing", "b-miss")}
+    lines = "".join(
+        f"""
+        <div class="ingLine">
+          <span class="badge {label[l['status']][1]}" style="margin:0;">{label[l['status']][0]}</span>
+          <span class="ingAmt">{_h(l['amount'])}</span>
+          <span>{_h(l['ingredient'])}</span>
+          {'<span class="badge b-warn" style="margin:0;">Expiring</span>' if l['expiring'] else ''}
+        </div>
+        """
+        for l in m["lines"]
+    ) or '<div class="muted">No ingredients listed.</div>'
+
+    add_missing = ""
+    if m["missing"]:
+        add_missing = f"""
+        <form method="post" action="/recipes/{int(r['id'])}/add-missing" style="margin-top:12px;">
+          <button class="btn btn-wide btn-warn" type="submit">Add missing to {_h(labels.get_labels()['grocery_list'])}</button>
+        </form>
+        """
+    details = " &middot; ".join(_h(x) for x in (r["meal_type"], f"Serves {r['servings']}" if r["servings"] else None) if x)
+
+    return f"""
+    {_styles()}{_auto_hide_banner_js()}{_recipe_css()}
+    <div class="wrap"><div class="container">
+      <header>
+        <div><h1>{_h(r['name'])}</h1><div class="sub">{details}</div></div>
+        <div class="fieldRow">
+          <a class="btn" href="/recipes">Back</a>
+          <a class="btn" href="/recipes/{int(r['id'])}/edit">Edit</a>
+        </div>
+      </header>
+      {_page_status_html()}
+      <div class="card">
+        <h2>Ingredients</h2>
+        <div class="muted">{m['have']} of {m['total']} &middot; {_recipe_badges(m) or ('<span class="badge b-miss">' + str(m['missing']) + ' missing</span>')}</div>
+        {lines}
+        {add_missing}
+      </div>
+      <div class="card">
+        <h2>Instructions</h2>
+        <div class="steps">{_h(r['instructions'] or '') or '<span class="muted">No instructions yet.</span>'}</div>
+      </div>
+      {f'<div class="card"><h2>Notes</h2><div class="steps">{_h(r["notes"])}</div></div>' if r['notes'] else ''}
+      <div class="card">
+        <form method="post" action="/recipes/{int(r['id'])}/delete" onsubmit="return confirm('Delete this recipe?');">
+          <button class="btn btn-wide btn-danger" type="submit">Delete recipe</button>
+        </form>
+      </div>
+    </div></div>
+    """
+
+
+_RECIPE_BLANK_ROWS = 5
+
+
+def _ingredient_row_html(amount="", ingredient="") -> str:
+    return f"""
+          <div class="ingRow">
+            <input type="text" name="amount" value="{_h(amount)}" maxlength="{recipes.AMOUNT_MAX}" placeholder="2 cups" aria-label="Amount">
+            <input type="text" name="ingredient" value="{_h(ingredient)}" maxlength="{INGREDIENT_MAX_LEN}" list="recipeIngredientList"
+                   placeholder="ingredient" autocomplete="off" aria-label="Ingredient">
+            <button class="btn btn-danger" type="button" data-remove-row aria-label="Remove this ingredient">&#10005;</button>
+          </div>"""
+
+
+def _recipe_form_html(r=None, error=None) -> str:
+    """Add/Edit form. Without JavaScript it still works: existing lines
+    plus a few blank rows, and blank rows are ignored on save."""
+    r = r or {"id": None, "name": "", "meal_type": "Supper", "servings": "", "instructions": "", "notes": "", "lines": []}
+    meal_pick = "".join(
+        f'<label><input type="radio" name="meal_type" value="{_h(t)}" {"checked" if t == r["meal_type"] else ""} required><span>{_h(t)}</span></label>'
+        for t in recipes.MEAL_TYPES
+    )
+    rows = "".join(_ingredient_row_html(l["amount"], l["ingredient"]) for l in r["lines"])
+    rows += "".join(_ingredient_row_html() for _ in range(_RECIPE_BLANK_ROWS if not r["lines"] else 2))
+    suggestions = "".join(f'<option value="{_h(n)}">' for n in recipes.suggestion_names())
+    title = "Edit recipe" if r["id"] else "Add recipe"
+    back = f"/recipes/{int(r['id'])}" if r["id"] else "/recipes"
+    error_html = f"<div id='statusBanner' class='status danger' data-keep>{_h(error)}</div>" if error else ""
+
+    return f"""
+    {_styles()}{_recipe_css()}
+    <div class="wrap"><div class="container">
+      <header>
+        <div><h1>{title}</h1></div>
+        <a class="btn" href="{back}">Cancel</a>
+      </header>
+      {error_html}
+      <form class="recipeForm" method="post" action="/recipes/save">
+        <input type="hidden" name="recipe_id" value="{int(r['id']) if r['id'] else ''}">
+        <div class="card">
+          <label class="formLabel" for="recipeName" style="margin-top:0;">Recipe name</label>
+          <input type="text" id="recipeName" name="name" value="{_h(r['name'])}" maxlength="{recipes.NAME_MAX}" required placeholder="e.g. Scrambled Eggs">
+          <span class="formLabel">Meal</span>
+          <div class="mealPick">{meal_pick}</div>
+          <label class="formLabel" for="recipeServings">Servings (optional)</label>
+          <input type="text" id="recipeServings" name="servings" value="{_h(r['servings'] or '')}" maxlength="{recipes.SERVINGS_MAX}" placeholder="e.g. 4" style="max-width:12em;">
+        </div>
+        <div class="card">
+          <h2>Ingredients</h2>
+          <div class="muted">Amount is optional. Pick names from the list when they fit, so they match your items.</div>
+          <datalist id="recipeIngredientList">{suggestions}</datalist>
+          <div id="ingRows">{rows}</div>
+          <button class="btn btn-wide" type="button" id="addIngRow">+ Add ingredient</button>
+          <template id="ingRowTemplate">{_ingredient_row_html()}</template>
+        </div>
+        <div class="card">
+          <label class="formLabel" for="recipeSteps" style="margin-top:0;">Instructions</label>
+          <textarea id="recipeSteps" name="instructions" maxlength="{recipes.TEXT_MAX}" placeholder="One step per line">{_h(r['instructions'] or '')}</textarea>
+          <label class="formLabel" for="recipeNotes">Notes (optional)</label>
+          <textarea id="recipeNotes" name="notes" maxlength="{recipes.TEXT_MAX}" style="min-height:80px;">{_h(r['notes'] or '')}</textarea>
+          <div class="row"><button class="btn btn-wide" type="submit">Save recipe</button></div>
+        </div>
+      </form>
+    </div></div>
+    <script>
+    (function() {{
+      var rows = document.getElementById("ingRows");
+      var tpl = document.getElementById("ingRowTemplate");
+      document.getElementById("addIngRow").addEventListener("click", function() {{
+        rows.appendChild(tpl.content.cloneNode(true));
+        var inputs = rows.querySelectorAll('input[name="ingredient"]');
+        inputs[inputs.length - 1].focus();
+      }});
+      rows.addEventListener("click", function(e) {{
+        var btn = e.target.closest("[data-remove-row]");
+        if (!btn) return;
+        var row = btn.closest(".ingRow");
+        if (rows.querySelectorAll(".ingRow").length > 1) row.remove();
+        else row.querySelectorAll("input").forEach(function(i) {{ i.value = ""; }});
+      }});
+    }})();
+    </script>
+    """
+
+
+@app.route("/recipes/new")
+def recipe_new_page():
+    return _recipes_off_redirect() or _recipe_form_html()
+
+
+@app.route("/recipes/<int:recipe_id>/edit")
+def recipe_edit_page(recipe_id):
+    off = _recipes_off_redirect()
+    if off:
+        return off
+    r = recipes.get_recipe(recipe_id)
+    if not r:
+        return redirect(_with_status("/recipes", "Recipe not found", "danger"))
+    return _recipe_form_html(r)
+
+
+def _cross_site_blocked():
+    if common_security.same_origin_ok(request):
+        return None
+    return Response("Blocked: request came from another site.", status=403, mimetype="text/plain")
+
+
+@app.route("/recipes/save", methods=["POST"])
+def recipe_save():
+    blocked = _cross_site_blocked() or _recipes_off_redirect()
+    if blocked:
+        return blocked
+    raw_id = (request.form.get("recipe_id") or "").strip()
+    recipe_id = int(raw_id) if raw_id.isdigit() else None
+    lines = list(zip(request.form.getlist("amount"), request.form.getlist("ingredient")))
+    try:
+        new_id = recipes.save_recipe(
+            recipe_id,
+            request.form.get("name"),
+            request.form.get("meal_type"),
+            request.form.get("servings"),
+            request.form.get("instructions"),
+            request.form.get("notes"),
+            lines,
+        )
+    except ValueError as e:
+        # Re-show the form with what was typed, so nothing is lost.
+        typed = {
+            "id": recipe_id, "name": request.form.get("name", ""),
+            "meal_type": request.form.get("meal_type") or "Supper",
+            "servings": request.form.get("servings", ""), "instructions": request.form.get("instructions", ""),
+            "notes": request.form.get("notes", ""),
+            "lines": [{"amount": a, "ingredient": i} for a, i in lines if (i or "").strip()],
+        }
+        return _recipe_form_html(typed, error=str(e)), 400
+    return redirect(_with_status(f"/recipes/{int(new_id)}", "Recipe saved", "ok"))
+
+
+@app.route("/recipes/<int:recipe_id>/delete", methods=["POST"])
+def recipe_delete(recipe_id):
+    blocked = _cross_site_blocked() or _recipes_off_redirect()
+    if blocked:
+        return blocked
+    recipes.delete_recipe(recipe_id)
+    return redirect(_with_status("/recipes", "Recipe deleted", "ok"))
+
+
+@app.route("/recipes/<int:recipe_id>/add-missing", methods=["POST"])
+def recipe_add_missing(recipe_id):
+    blocked = _cross_site_blocked() or _recipes_off_redirect()
+    if blocked:
+        return blocked
+    r = recipes.get_recipe(recipe_id)
+    if not r:
+        return redirect(_with_status("/recipes", "Recipe not found", "danger"))
+    ctx = recipes.stock_context(row[0] for row in get_expiring_items(EXPIRATION_WARN_DAYS))
+    result = recipes.add_missing_to_grocery(recipe_id, recipes.match_recipe(r, ctx))
+    list_name = labels.get_labels()["grocery_list"]
+    parts = []
+    if result["added"]:
+        parts.append(f"Added to {list_name}: {', '.join(result['added'])}.")
+    if result["already"]:
+        parts.append(f"Already on it: {', '.join(result['already'])}.")
+    if result["kept_off"]:
+        parts.append(f"Not added (set to stay off the list): {', '.join(result['kept_off'])}.")
+    msg = " ".join(parts) or "Nothing is missing."
+    return redirect(_with_status(f"/recipes/{int(recipe_id)}", msg[:400], "ok" if result["added"] or result["already"] else "warn"))
+
+
+@app.route("/grocery-extras/<int:extra_id>/remove", methods=["POST"])
+def grocery_extra_remove(extra_id):
+    """Works whether or not Recipes is on: extra lines stay on the list
+    after Recipes is turned off, so they must stay removable."""
+    blocked = _cross_site_blocked()
+    if blocked:
+        return blocked
+    recipes.remove_extra(extra_id)
+    return redirect(_return_url(_back_param("/grocery-list"), "Removed from the list"))
+
+
+# ------------------------------------------------------------
 # SUBSECTION: Tag Ingredients (Tools > Recipes)
 # One form for every untagged item. Every Save button submits the whole
 # form, so whatever was typed in other rows is saved too, never lost.
@@ -2293,7 +2668,10 @@ def _grocery_text_lines(include_aisle: bool = True) -> list:
     tools may already be parsing."""
     aisle_map = get_aisle_map()
     items = _sort_by_aisle(get_grocery_list(), aisle_map)
-    if not items:
+    # Free-text lines a recipe added for ingredients no item is tagged
+    # with. Same "- text" format, after the items.
+    extras = recipes.list_extras()
+    if not items and not extras:
         return ["(Empty)"]
     lines = []
     for row in items:
@@ -2303,6 +2681,7 @@ def _grocery_text_lines(include_aisle: bool = True) -> list:
             lines.append(f"- {name} ({aisle})" if aisle else f"- {name}")
         else:
             lines.append(f"- {name}")
+    lines += [f"- {e['text']}" for e in extras]
     return lines
 
 
@@ -2320,6 +2699,8 @@ def grocery_list_page():
     here = _here()
 
     lis = ""
+    # Shown whether or not Recipes is still on: it's still the shopping list.
+    extras = recipes.list_extras()
     for row in grocery_items:
         barcode = row[0]
         name = row[1]
@@ -2331,6 +2712,18 @@ def grocery_list_page():
           {aisle_html}
           <form class="inline" method="post" action="/grocery-remove">
             <input type="hidden" name="barcode" value="{_h(barcode)}">
+            {_back_field(here)}
+            <button class="btn btn-danger">Remove</button>
+          </form>
+        </li>
+        """
+
+    for e in extras:
+        lis += f"""
+        <li style="margin: 10px 0; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+          <span>{_h(e['text'])}</span>
+          <span class="chip">from a recipe</span>
+          <form class="inline" method="post" action="/grocery-extras/{int(e['id'])}/remove">
             {_back_field(here)}
             <button class="btn btn-danger">Remove</button>
           </form>
@@ -2885,6 +3278,7 @@ def settings_page():
               <span>Recipes</span>
             </label>
           </div>
+          {_staples_field_html() if labels.get_recipes_enabled() else ""}
           <div class="row"><button class="btn btn-wide" type="submit">Save</button></div>
         </form>
       </div>
@@ -3049,6 +3443,8 @@ def settings_update():
     # Settings forms post here too without this one.
     if request.form.get("recipes_present") == "1":
         labels.set_recipes_enabled(request.form.get("recipes_enabled") == "1")
+    if request.form.get("recipe_staples") is not None:
+        recipes.set_staples(request.form.get("recipe_staples"))
 
     if advertise_ip is not None:
         advertise_ip = advertise_ip.strip()
@@ -3640,6 +4036,8 @@ def print_grocery():
         aisle = aisle_map.get(barcode)
         aisle_html = f" <span class='chip'>{_h(aisle)}</span>" if aisle else ""
         rows += f"<li style='margin:10px 0;font-size:20px;'>{_h(name)}{aisle_html}</li>"
+    for e in recipes.list_extras():
+        rows += f"<li style='margin:10px 0;font-size:20px;'>{_h(e['text'])}</li>"
     if not rows:
         rows = "<li style='margin:10px 0;font-size:20px;'>(Empty)</li>"
 
