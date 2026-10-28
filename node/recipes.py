@@ -65,7 +65,7 @@ def _tagged_items():
     try:
         cur = conn.cursor()
         cur.execute("""
-            SELECT i.barcode, i.name, i.quantity, i.include_in_grocery, i.ingredient,
+            SELECT i.id, i.barcode, i.name, i.quantity, i.include_in_grocery, i.ingredient,
                    (g.item_id IS NOT NULL) AS on_list
             FROM items i LEFT JOIN grocery_list g ON g.item_id = i.id
             WHERE i.ingredient IS NOT NULL AND i.ingredient != '';
@@ -316,9 +316,12 @@ def remove_extra(extra_id: int) -> None:
 
 
 def add_missing_to_grocery(recipe_id: int, matched: dict) -> dict:
-    """"Add missing to Grocery List". For each missing ingredient:
-      - an item tagged with it is set to go on the list -> it's at 0, so
-        it's already on the list ("already")
+    """"Add missing to Grocery List". For each missing ingredient (so every
+    item tagged with it is at 0):
+      - an item tagged with it that's set to go on the list is on it
+        -> "already"
+      - such items exist but were taken off the list (Grocery List >
+        Remove) -> put back on the list ("added")
       - items tagged with it are all set to stay off the list -> left
         alone ("kept_off"); this never overrides that switch
       - no item is tagged with it -> a free-text extra line ("added", or
@@ -338,8 +341,16 @@ def add_missing_to_grocery(recipe_id: int, matched: dict) -> dict:
                 continue
             name = line["ingredient"]
             items = by_key.get(line["key"], [])
-            if any(int(i["include_in_grocery"]) for i in items):
+            included = [i for i in items if int(i["include_in_grocery"])]
+            if any(i["on_list"] for i in included):
                 result["already"].append(name)
+            elif included:
+                # At 0 but removed from the list earlier: put them back.
+                cur.executemany(
+                    "INSERT OR IGNORE INTO grocery_list (item_id, added_date) VALUES (?, CURRENT_TIMESTAMP);",
+                    [(i["id"],) for i in included],
+                )
+                result["added"].append(name)
             elif items:
                 result["kept_off"].append(name)
             elif line["key"] in extra_keys:      # "egg" already there covers "eggs"
