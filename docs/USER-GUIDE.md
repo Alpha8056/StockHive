@@ -49,6 +49,7 @@ Something not working? See [Troubleshooting](TROUBLESHOOTING.md).
 | Tag items with ingredient names for recipes | [15. Ingredients and recipes](#15-ingredients-and-recipes) |
 | See which recipes I can make with what I have | [15. Ingredients and recipes](#15-ingredients-and-recipes) |
 | Add a recipe's missing ingredients to the grocery list | [15. Ingredients and recipes](#15-ingredients-and-recipes) |
+| Import recipes from TheMealDB | [15. Ingredients and recipes](#15-ingredients-and-recipes) |
 
 ---
 
@@ -307,7 +308,8 @@ To open it, go to **Tools**, then **Open Settings**.
   Tap **Save**.
 - **Page Labels:** rename the wording to suit what this node tracks. For example, change
   **Grocery List** to "Part List" for a parts node. Tap **Save Labels**.
-- **Recipes:** turn on ingredient tags and recipes for this node, and set your **Staples**.
+- **Recipes:** turn on ingredient tags and recipes for this node, and set your **Staples**,
+  **Same as** names and (optionally) a **TheMealDB key**.
   See [15. Ingredients and recipes](#15-ingredients-and-recipes).
 
 The other cards (**Advertised Address**, **Launcher**, **Labels & Printer**,
@@ -493,7 +495,24 @@ as missing. The starting list is salt, pepper, water and oil.
 
 To change it, go to **Settings**, find the **Recipes** card, edit **Staples** (names separated
 by commas) and tap **Save**. Names must match exactly, so if your recipes say "olive oil",
-add "olive oil" too.
+add "olive oil" too, or add a **Same as** rule (below) like `olive oil = oil`.
+
+### Same as
+
+Recipes, especially imported ones, often use longer names than your tags: "Cheddar Cheese"
+where your item is tagged "cheddar". A **Same as** rule tells StockHive they're the same.
+
+To change the rules, go to **Settings**, find the **Recipes** card, and edit **Same as**. Write
+one rule per line, with the recipe's name on the left and your tag on the right:
+
+```
+cheddar cheese = cheddar
+olive oil = oil
+```
+
+Then tap **Save**. A starter list is filled in for common names, like `black pepper = pepper` and
+`plain flour = flour`. Plurals are handled already, so `chicken breast = chicken` also covers
+"chicken breasts".
 
 ### The Recipes page
 
@@ -540,4 +559,37 @@ instructions.
 
 These lines are on the exported and printed list too, and they stay on the list even if you
 turn Recipes off later.
+
+### Browse TheMealDB
+
+[TheMealDB](https://www.themealdb.com/) is a free online recipe collection. You can copy its
+recipes into this node.
+
+1. On the **Recipes** page, tap **Browse TheMealDB**.
+2. Search by recipe name, or tap a category, like **Breakfast** or **Seafood**. Categories show
+   12 recipes at a time; use **Next** for more.
+3. Each recipe shows how many of its ingredients you have, the same way your own recipes do.
+4. Tap **Import** to copy a recipe into this node. It then shows **Imported ✓**. Importing it
+   again never makes a second copy.
+5. To copy a whole category, tap **Import all** at the bottom. You can keep using StockHive while
+   it runs. The page shows its progress, and **Cancel import** stops it.
+
+This page needs the node to be online. If TheMealDB can't be reached, it says so after a few
+seconds instead of waiting.
+
+### Imported recipes
+
+Imported recipes are saved on the node, so they work without internet. They show where they came
+from and a credit to TheMealDB, plus a picture when there's internet.
+
+Each one gets a meal type from its TheMealDB category: **Breakfast** stays Breakfast, **Side**
+stays Side, **Starter** and **Dessert** become Snack, and everything else (Beef, Chicken, Pasta,
+Seafood and so on) becomes Supper. To change it, open the recipe, tap **Edit**, pick a **Meal**,
+and tap **Save recipe**. You can edit anything else the same way. Importing it again later never
+overwrites your changes.
+
+**TheMealDB key:** StockHive uses TheMealDB's free test key, which TheMealDB says is for
+development and educational use. If you become a TheMealDB supporter, type your key into
+**TheMealDB key** on the **Recipes** card in **Settings** and tap **Save**. To go back to the
+free key, type `1`.
 

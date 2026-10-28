@@ -22,6 +22,25 @@ AMOUNT_MAX = 30
 TEXT_MAX = 20000          # instructions / notes
 MAX_LINES = 100           # ingredient lines per recipe
 _STAPLES_KEY = "recipe_staples"
+_ALIASES_KEY = "recipe_aliases"
+ALIAS_MAX_RULES = 200
+
+# "Same as" rules: the left side is matched as if it were the right side.
+# Starter set: left sides are names TheMealDB uses; right sides are the
+# simple tags people give their items. Singular/plural is handled
+# separately ("chicken breast" also covers "chicken breasts").
+DEFAULT_ALIASES = (
+    ("cheddar cheese", "cheddar"), ("parmesan cheese", "parmesan"),
+    ("chicken breast", "chicken"), ("chicken thighs", "chicken"),
+    ("garlic clove", "garlic"), ("minced garlic", "garlic"),
+    ("olive oil", "oil"), ("vegetable oil", "oil"), ("sunflower oil", "oil"),
+    ("plain flour", "flour"), ("caster sugar", "sugar"), ("granulated sugar", "sugar"),
+    ("unsalted butter", "butter"), ("whole milk", "milk"),
+    ("spring onions", "green onion"), ("scallions", "green onion"),
+    ("chopped tomatoes", "canned tomatoes"),
+    ("black pepper", "pepper"), ("sea salt", "salt"),
+    ("minced beef", "ground beef"), ("double cream", "heavy cream"),
+)
 
 
 # ------------------------------------------------------------
@@ -46,10 +65,9 @@ def _singular(word: str) -> str:
     return word
 
 
-def ingredient_key(name):
-    """The form two ingredient names are compared in: the item-tag
-    normalization, with the last word made singular ("green onions" ->
-    "green onion"). None for blank."""
+def _base_key(name):
+    """Item-tag normalization with the last word made singular ("green
+    onions" -> "green onion"). None for blank."""
     value = normalize_ingredient(name)
     if not value:
         return None
@@ -58,7 +76,24 @@ def ingredient_key(name):
     return " ".join(words)
 
 
-def _tagged_items():
+def ingredient_key(name, aliases=None):
+    """The form two ingredient names are compared in, for local and
+    imported recipes alike: _base_key(), then the "same as" rules
+    (aliases = get_alias_map(), loaded once per page). Rules can chain
+    ("a = b", "b = c") up to three steps; a loop just stops."""
+    key = _base_key(name)
+    if key and aliases:
+        seen = {key}
+        for _ in range(3):
+            nxt = aliases.get(key)
+            if not nxt or nxt in seen:
+                break
+            seen.add(nxt)
+            key = nxt
+    return key
+
+
+def _tagged_items(aliases=None):
     """Every item with an ingredient tag, with what matching and the
     grocery list need to know about it."""
     conn = _connect()
@@ -70,7 +105,7 @@ def _tagged_items():
             FROM items i LEFT JOIN grocery_list g ON g.item_id = i.id
             WHERE i.ingredient IS NOT NULL AND i.ingredient != '';
         """)
-        return [dict(r, key=ingredient_key(r["ingredient"])) for r in cur.fetchall()]
+        return [dict(r, key=ingredient_key(r["ingredient"], aliases)) for r in cur.fetchall()]
     finally:
         conn.close()
 
@@ -80,14 +115,15 @@ def stock_context(expiring_barcodes=()):
     stock (a tagged item with quantity > 0), staple keys, and keys of
     in-stock items in Expiring Soon."""
     expiring_barcodes = set(expiring_barcodes)
+    aliases = get_alias_map()
     have, expiring = set(), set()
-    for item in _tagged_items():
+    for item in _tagged_items(aliases):
         if int(item["quantity"] or 0) > 0:
             have.add(item["key"])
             if item["barcode"] in expiring_barcodes:
                 expiring.add(item["key"])
-    staples = {ingredient_key(s) for s in get_staples()}
-    return {"have": have, "staples": staples, "expiring": expiring}
+    staples = {ingredient_key(s, aliases) for s in get_staples()}
+    return {"have": have, "staples": staples, "expiring": expiring, "aliases": aliases}
 
 
 def match_recipe(recipe: dict, ctx: dict) -> dict:
@@ -97,7 +133,7 @@ def match_recipe(recipe: dict, ctx: dict) -> dict:
     whether it uses anything in Expiring Soon."""
     lines = []
     for line in recipe["lines"]:
-        key = ingredient_key(line["ingredient"])
+        key = ingredient_key(line["ingredient"], ctx.get("aliases"))
         if key in ctx["have"]:
             status = "have"
         elif key in ctx["staples"]:
@@ -140,6 +176,53 @@ def set_staples(text: str) -> list:
             staples.append(value)
     db.set_setting(_STAPLES_KEY, json.dumps(staples))
     return staples
+
+
+# ------------------------------------------------------------
+# SUBSECTION: "Same as" rules (Settings > Recipes)
+# ------------------------------------------------------------
+def get_alias_rules() -> list:
+    """[(name, same_as)] as saved, normalized; the starter set until the
+    box is first saved."""
+    raw = db.get_setting(_ALIASES_KEY)
+    if raw is None:
+        return list(DEFAULT_ALIASES)
+    try:
+        rules = json.loads(raw)
+    except (TypeError, ValueError):
+        return list(DEFAULT_ALIASES)
+    return [tuple(r) for r in rules if isinstance(r, list) and len(r) == 2]
+
+
+def alias_rules_text() -> str:
+    return "\n".join(f"{a} = {b}" for a, b in get_alias_rules())
+
+
+def set_alias_rules(text: str) -> list:
+    """One "name = same as" rule per line; lines without exactly one "="
+    or with a blank side are ignored. Saves and returns the rules."""
+    rules, seen = [], set()
+    for line in (text or "").splitlines():
+        parts = line.split("=")
+        if len(parts) != 2:
+            continue
+        a, b = normalize_ingredient(parts[0]), normalize_ingredient(parts[1])
+        if a and b and a != b and a not in seen:
+            seen.add(a)
+            rules.append((a, b))
+    rules = rules[:ALIAS_MAX_RULES]
+    db.set_setting(_ALIASES_KEY, json.dumps(rules))
+    return rules
+
+
+def get_alias_map() -> dict:
+    """{base key of name: base key of same-as} for ingredient_key()."""
+    out = {}
+    for a, b in get_alias_rules():
+        ka, kb = _base_key(a), _base_key(b)
+        if ka and kb and ka != kb:
+            out[ka] = kb
+    return out
 
 
 # ------------------------------------------------------------
@@ -254,6 +337,62 @@ def delete_recipe(recipe_id: int) -> bool:
         conn.close()
 
 
+def import_recipe(fields: dict):
+    """Saves an imported recipe (fields from mealdb.meal_to_fields) unless
+    one with the same source + external_id exists; an existing one is
+    never overwritten, so edits to it are kept. Returns (recipe_id,
+    created)."""
+    lines = []
+    for amount, ingredient in fields["lines"][:MAX_LINES]:
+        ingredient = normalize_ingredient(ingredient)
+        if ingredient:
+            lines.append((_clip(amount, AMOUNT_MAX), ingredient))
+    meal_type = fields["meal_type"] if fields["meal_type"] in MEAL_TYPES else "Supper"
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN IMMEDIATE;")
+        cur.execute("SELECT id FROM recipes WHERE source = ? AND external_id = ?;",
+                    (fields["source"], fields["external_id"]))
+        row = cur.fetchone()
+        if row:
+            conn.rollback()
+            return row["id"], False
+        cur.execute("""
+            INSERT INTO recipes (name, meal_type, servings, instructions, notes, source, external_id,
+                                 image_url, source_url, source_category, source_area)
+            VALUES (?, ?, NULL, ?, NULL, ?, ?, ?, ?, ?, ?);
+        """, (
+            _clip(fields["name"], NAME_MAX) or "Untitled recipe", meal_type,
+            _clip(fields.get("instructions"), TEXT_MAX), fields["source"], fields["external_id"],
+            fields.get("image_url"), fields.get("source_url"),
+            _clip(fields.get("source_category"), NAME_MAX), _clip(fields.get("source_area"), NAME_MAX),
+        ))
+        recipe_id = cur.lastrowid
+        cur.executemany(
+            "INSERT INTO recipe_ingredients (recipe_id, position, amount, ingredient) VALUES (?, ?, ?, ?);",
+            [(recipe_id, i, amount, ingredient) for i, (amount, ingredient) in enumerate(lines)],
+        )
+        conn.commit()
+        return recipe_id, True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def imported_ids(source: str) -> dict:
+    """{external_id: recipe_id} for every recipe imported from `source`."""
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT external_id, id FROM recipes WHERE source = ? AND external_id IS NOT NULL;", (source,))
+        return {r["external_id"]: r["id"] for r in cur.fetchall()}
+    finally:
+        conn.close()
+
+
 def suggestion_names() -> list:
     """Ingredient names from item tags and every recipe, for the
     recipe form's suggestions."""
@@ -279,14 +418,15 @@ def suggestion_names() -> list:
 def prune_extras() -> None:
     """Drops extra lines that are now covered by a real item: one tagged
     with that ingredient is in stock, or is on the list itself."""
-    covered = {i["key"] for i in _tagged_items() if int(i["quantity"] or 0) > 0 or i["on_list"]}
+    aliases = get_alias_map()
+    covered = {i["key"] for i in _tagged_items(aliases) if int(i["quantity"] or 0) > 0 or i["on_list"]}
     if not covered:
         return
     conn = _connect()
     try:
         cur = conn.cursor()
         cur.execute("SELECT id, text FROM grocery_extras;")
-        stale = [(r["id"],) for r in cur.fetchall() if ingredient_key(r["text"]) in covered]
+        stale = [(r["id"],) for r in cur.fetchall() if ingredient_key(r["text"], aliases) in covered]
         if stale:
             cur.executemany("DELETE FROM grocery_extras WHERE id = ?;", stale)
             conn.commit()
@@ -327,15 +467,16 @@ def add_missing_to_grocery(recipe_id: int, matched: dict) -> dict:
       - no item is tagged with it -> a free-text extra line ("added", or
         "already" if that line is there)
     Returns {"added": [...], "already": [...], "kept_off": [...]}."""
+    aliases = get_alias_map()
     by_key = {}
-    for item in _tagged_items():
+    for item in _tagged_items(aliases):
         by_key.setdefault(item["key"], []).append(item)
     result = {"added": [], "already": [], "kept_off": []}
     conn = _connect()
     try:
         cur = conn.cursor()
         cur.execute("SELECT text FROM grocery_extras;")
-        extra_keys = {ingredient_key(r["text"]) for r in cur.fetchall()}
+        extra_keys = {ingredient_key(r["text"], aliases) for r in cur.fetchall()}
         for line in matched["lines"]:
             if line["status"] != "missing":
                 continue

@@ -29,6 +29,7 @@ import identity
 import photos
 import label_printer
 import recipes
+import mealdb
 
 class PrefixMiddleware:
     def __init__(self, app):
@@ -1873,6 +1874,16 @@ def _staples_field_html() -> str:
             <input type="text" id="stapleInput" name="recipe_staples" value="{_h(', '.join(recipes.get_staples()))}" placeholder="salt, pepper, water, oil">
           </div>
           <div class="muted" style="margin-top:6px;">Basics you always have, separated by commas. Recipes never list them as missing. Names must match exactly, so add "olive oil" too if your recipes use it.</div>
+          <label class="muted" for="aliasInput" style="display:block;margin-top:14px;">Same as</label>
+          <textarea id="aliasInput" name="recipe_aliases" rows="8" spellcheck="false"
+                    style="width:100%;font-size:16px;padding:10px;border-radius:12px;border:1px solid var(--border);background:var(--input);color:var(--text);font-family:inherit;">{_h(recipes.alias_rules_text())}</textarea>
+          <div class="muted" style="margin-top:6px;">One per line, like <span class="mono">cheddar cheese = cheddar</span>. The name on the left counts as the one on the right when matching recipes to your items.</div>
+          <div class="fieldRow" style="margin-top:14px;">
+            <label class="muted" style="min-width:110px;" for="mealdbKey">TheMealDB key</label>
+            <input type="password" id="mealdbKey" name="mealdb_key" value="" autocomplete="off"
+                   placeholder="{'Supporter key saved' if mealdb.has_custom_key() else 'Using the free test key'}">
+          </div>
+          <div class="muted" style="margin-top:6px;">Optional. Blank keeps the current key; type <span class="mono">1</span> to go back to the free test key. TheMealDB's free key is meant for development and educational use.</div>
     """
 
 
@@ -1913,8 +1924,26 @@ def _recipe_css() -> str:
       .recipeForm textarea{ min-height:140px; padding:12px; border-radius:14px; border:1px solid var(--border);
                             background:var(--input); color:var(--text); font-family:inherit; }
       .formLabel{ display:block; color:var(--muted); font-size:14px; margin:16px 0 8px 0; }
+      .rrow{ display:flex; align-items:center; gap:12px; }
+      .rthumb{ width:64px; height:64px; flex-shrink:0; border-radius:10px; object-fit:cover; background:var(--btn); }
+      .rimg{ display:block; width:100%; max-height:320px; object-fit:cover; border-radius:14px; margin-bottom:12px; }
+      .credit{ color:var(--muted); font-size:13px; margin-top:10px; }
+      .credit a{ color:inherit; }
+      .pager{ display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
     </style>
     """
+
+
+def _recipe_thumb_html(url, cls="rthumb") -> str:
+    """An image straight from its source (the browser fetches it, never
+    the node), lazy-loaded and removed if it can't load, e.g. offline."""
+    if not url or not str(url).lower().startswith(("https://", "http://")):
+        return ""
+    return f'<img class="{cls}" src="{_h(url)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">'
+
+
+def _mealdb_credit_html() -> str:
+    return f'<div class="credit">{_h(mealdb.CREDIT_TEXT)} (<a href="{mealdb.CREDIT_URL}" target="_blank" rel="noopener">themealdb.com</a>)</div>'
 
 
 def _recipe_badges(m: dict) -> str:
@@ -1935,15 +1964,14 @@ def recipes_page():
     if meal not in ("All", *recipes.MEAL_TYPES):
         meal = "All"
     q = (request.args.get("q", "") or "").strip().lower()[:100]
-    q_key = recipes.ingredient_key(q) if q else None
-
     ctx = recipes.stock_context(row[0] for row in get_expiring_items(EXPIRATION_WARN_DAYS))
+    q_key = recipes.ingredient_key(q, ctx["aliases"]) if q else None
     shown = []
     for r in recipes.list_recipes():
         if meal != "All" and r["meal_type"] != meal:
             continue
         if q and q not in r["name"].lower() and not any(
-                q in l["ingredient"] or recipes.ingredient_key(l["ingredient"]) == q_key for l in r["lines"]):
+                q in l["ingredient"] or recipes.ingredient_key(l["ingredient"], ctx["aliases"]) == q_key for l in r["lines"]):
             continue
         shown.append((r, recipes.match_recipe(r, ctx)))
     # "Can make now" first, then fewest missing, then by name.
@@ -1958,10 +1986,13 @@ def recipes_page():
 
     cards = "".join(
         f"""
-        <a class="rcard" href="/recipes/{int(r['id'])}">
-          <div class="rname">{_h(r['name'])}</div>
-          <div class="muted">{_h(r['meal_type'])} &middot; {m['have']} of {m['total']} ingredient{'' if m['total'] == 1 else 's'}</div>
-          <div>{_recipe_badges(m)}</div>
+        <a class="rcard rrow" href="/recipes/{int(r['id'])}">
+          {_recipe_thumb_html(r.get('image_url'))}
+          <div>
+            <div class="rname">{_h(r['name'])}</div>
+            <div class="muted">{_h(r['meal_type'])} &middot; {m['have']} of {m['total']} ingredient{'' if m['total'] == 1 else 's'}</div>
+            <div>{_recipe_badges(m)}</div>
+          </div>
         </a>
         """
         for r, m in shown
@@ -1974,6 +2005,7 @@ def recipes_page():
         <div><h1>Recipes</h1><div class="sub">What you can make with what you have</div></div>
         <div class="fieldRow">
           <a class="btn" href="/">Home</a>
+          <a class="btn" href="/recipes/mealdb">Browse TheMealDB</a>
           <a class="btn btn-warn" href="/recipes/new">Add recipe</a>
         </div>
       </header>
@@ -2024,6 +2056,13 @@ def recipe_page(recipe_id):
         </form>
         """
     details = " &middot; ".join(_h(x) for x in (r["meal_type"], f"Serves {r['servings']}" if r["servings"] else None) if x)
+    source_html = ""
+    if r["source"] == "themealdb":
+        origin = " &middot; ".join(_h(x) for x in ("From TheMealDB", r.get("source_category"), r.get("source_area")) if x)
+        link = ""
+        if (r.get("source_url") or "").lower().startswith(("https://", "http://")):
+            link = f' &middot; <a href="{_h(r["source_url"])}" target="_blank" rel="noopener noreferrer">Original recipe</a>'
+        source_html = f'<div class="card">{_recipe_thumb_html(r.get("image_url"), "rimg")}<div class="muted">{origin}{link}</div>{_mealdb_credit_html()}</div>'
 
     return f"""
     {_styles()}{_auto_hide_banner_js()}{_recipe_css()}
@@ -2036,6 +2075,7 @@ def recipe_page(recipe_id):
         </div>
       </header>
       {_page_status_html()}
+      {source_html}
       <div class="card">
         <h2>Ingredients</h2>
         <div class="muted">{m['have']} of {m['total']} &middot; {_recipe_badges(m) or ('<span class="badge b-miss">' + str(m['missing']) + ' missing</span>')}</div>
@@ -2233,6 +2273,237 @@ def grocery_extra_remove(extra_id):
         return blocked
     recipes.remove_extra(extra_id)
     return redirect(_return_url(_back_param("/grocery-list"), "Removed from the list"))
+
+
+# ------------------------------------------------------------
+# SUBSECTION: Browse TheMealDB (Recipes > Browse TheMealDB)
+# The only pages that call TheMealDB (through mealdb.py, which bounds
+# every call). Imported recipes are saved locally and then work offline.
+# ------------------------------------------------------------
+@app.route("/recipes/mealdb")
+def mealdb_page():
+    off = _recipes_off_redirect()
+    if off:
+        return off
+    q = (request.args.get("q", "") or "").strip()[:60]
+    cats = mealdb.categories()                       # cached; never raises
+    cat = (request.args.get("c", "") or "").strip()
+    if cat not in cats:
+        cat = ""
+    try:
+        page = max(1, int(request.args.get("page", "1")))
+    except ValueError:
+        page = 1
+    size = mealdb.PAGE_SIZE
+
+    error, entries, details, total = None, [], {}, 0
+    if q:
+        try:
+            meals = mealdb.search(q)
+        except mealdb.MealDBError as e:
+            error, meals = str(e), []
+        total = len(meals)
+        page_meals = meals[(page - 1) * size: page * size]
+        details = {str(m["idMeal"]): m for m in page_meals}
+        entries = [{"id": str(m["idMeal"]), "name": m.get("strMeal") or "", "thumb": m.get("strMealThumb") or ""}
+                   for m in page_meals]
+    elif cat:
+        try:
+            listing = mealdb.category_meals(cat)
+        except mealdb.MealDBError as e:
+            error, listing = str(e), []
+        total = len(listing)
+        entries = listing[(page - 1) * size: page * size]
+        details = mealdb.details_for([e["id"] for e in entries])
+
+    ctx = recipes.stock_context(row[0] for row in get_expiring_items(EXPIRATION_WARN_DAYS))
+    imported = recipes.imported_ids("themealdb")
+    here = _here()
+
+    rows = ""
+    for e in entries:
+        meal = details.get(e["id"])
+        if meal:
+            m = recipes.match_recipe(mealdb.as_recipe(meal), ctx)
+            info = f"{m['have']} of {m['total']} ingredient{'' if m['total'] == 1 else 's'}"
+            badges = _recipe_badges(m)
+            category = meal.get("strCategory") or cat
+        else:
+            info, badges, category = "&mdash;", "", cat
+        if e["id"] in imported:
+            action = f'<a class="btn" href="/recipes/{int(imported[e["id"]])}">Imported &#10003;</a>'
+        else:
+            action = f"""
+            <form method="post" action="/recipes/mealdb/import" class="inline">
+              <input type="hidden" name="id" value="{_h(e['id'])}">
+              {_back_field(here)}
+              <button class="btn btn-warn" type="submit">Import</button>
+            </form>"""
+        rows += f"""
+        <div class="rcard rrow">
+          {_recipe_thumb_html(e.get('thumb'))}
+          <div style="flex:1;min-width:0;">
+            <div class="rname">{_h(e['name'])}</div>
+            <div class="muted">{_h(category)} &middot; {info}</div>
+            <div>{badges}</div>
+          </div>
+          {action}
+        </div>"""
+
+    if not rows and not error:
+        if q:
+            rows = f'<div class="muted">No TheMealDB recipes match "{_h(q)}".</div>'
+        elif cat:
+            rows = '<div class="muted">No recipes in this category.</div>'
+        else:
+            rows = '<div class="muted">Search by name, or pick a category above.</div>'
+
+    def page_link(n, text):
+        params = [("q", q)] if q else [("c", cat)]
+        return f'<a class="btn" href="/recipes/mealdb?{urlencode(params + [("page", n)])}">{text}</a>'
+
+    pager = ""
+    if total > size:
+        last = (total + size - 1) // size
+        pager = '<div class="pager">'
+        if page > 1:
+            pager += page_link(page - 1, "&larr; Previous")
+        pager += f'<span class="muted" style="align-self:center;">Page {page} of {last}</span>'
+        if page < last:
+            pager += page_link(page + 1, "Next &rarr;")
+        pager += "</div>"
+
+    cat_buttons = "".join(
+        f'<a class="btn{" on" if c == cat else ""}" href="/recipes/mealdb?{urlencode([("c", c)])}">{_h(c)}</a>'
+        for c in cats
+    )
+    import_all = ""
+    if cat and total and not error:
+        import_all = f"""
+        <form method="post" action="/recipes/mealdb/import-all" style="margin-top:12px;">
+          <input type="hidden" name="category" value="{_h(cat)}">
+          {_back_field(here)}
+          <button class="btn btn-wide" type="submit">Import all {total} in {_h(cat)}</button>
+        </form>"""
+    error_html = f"<div id='statusBanner' class='status warn' data-keep>{_h(error)}</div>" if error else ""
+    heading = f'Results for "{_h(q)}"' if q else (_h(cat) if cat else "TheMealDB")
+
+    return f"""
+    {_styles()}{_auto_hide_banner_js()}{_recipe_css()}
+    <div class="wrap"><div class="container">
+      <header>
+        <div><h1>Browse TheMealDB</h1><div class="sub">Import recipes into this node. Imported recipes work offline.</div></div>
+        <a class="btn" href="/recipes">Back</a>
+      </header>
+      {_page_status_html()}
+      {error_html}
+      {_import_status_html()}
+      <div class="card">
+        <form method="get" action="/recipes/mealdb" class="fieldRow">
+          <input type="text" name="q" value="{_h(q)}" placeholder="Search TheMealDB by recipe name">
+          <button class="btn" type="submit">Search</button>
+        </form>
+        <div class="tabs" style="margin-top:12px;">{cat_buttons}</div>
+      </div>
+      <div class="card">
+        <h2>{heading}</h2>
+        {f'<div class="muted">{total} recipe{"" if total == 1 else "s"}</div>' if total else ''}
+        {rows}
+        {pager}
+        {import_all}
+        {_mealdb_credit_html()}
+      </div>
+    </div></div>
+    """
+
+
+def _import_status_html() -> str:
+    """Progress for "Import all". Polls import-status, which never calls
+    TheMealDB; text is set with textContent, never as HTML."""
+    st = mealdb.import_status()
+    if st.get("state") in (None, "idle"):
+        return ""
+    return """
+      <div class="card" id="importBox">
+        <div id="importText" class="muted"></div>
+        <form method="post" action="/recipes/mealdb/import-cancel" id="importCancel" style="margin-top:10px;">
+          <button class="btn btn-danger" type="submit">Cancel import</button>
+        </form>
+      </div>
+      <script>
+      (function() {
+        var text = document.getElementById("importText");
+        var cancel = document.getElementById("importCancel");
+        function show(s) {
+          var counts = "imported " + s.imported + ", already had " + s.skipped + (s.failed ? ", failed " + s.failed : "");
+          if (s.state === "running") {
+            text.textContent = "Importing " + s.category + ": " + s.processed + " of " + (s.total || "?") + " (" + counts + ")";
+          } else {
+            var label = s.state === "done" ? "Finished" : (s.state === "cancelled" ? "Stopped" : "Stopped early");
+            text.textContent = label + " importing " + s.category + ": " + counts + "." + (s.message ? " " + s.message : "");
+            cancel.style.display = "none";
+          }
+          return s.state === "running";
+        }
+        function poll() {
+          fetch("/recipes/mealdb/import-status").then(function(r) { return r.json(); }).then(function(s) {
+            if (show(s)) setTimeout(poll, 2000);
+          }).catch(function() { setTimeout(poll, 5000); });
+        }
+        poll();
+      })();
+      </script>
+    """
+
+
+@app.route("/recipes/mealdb/import", methods=["POST"])
+def mealdb_import():
+    blocked = _cross_site_blocked() or _recipes_off_redirect()
+    if blocked:
+        return blocked
+    back = _back_param("/recipes/mealdb")
+    meal_id = (request.form.get("id") or "").strip()
+    if not mealdb.is_valid_id(meal_id):
+        return redirect(_return_url(back, "Recipe not found", "danger"))
+    try:
+        meal = mealdb.lookup(meal_id)
+    except mealdb.MealDBError as e:
+        return redirect(_return_url(back, str(e), "warn"))
+    fields = mealdb.meal_to_fields(meal)
+    _rid, created = recipes.import_recipe(fields)
+    msg = f"Imported {fields['name']}" if created else f"{fields['name']} was already imported"
+    return redirect(_return_url(back, msg))
+
+
+@app.route("/recipes/mealdb/import-all", methods=["POST"])
+def mealdb_import_all():
+    blocked = _cross_site_blocked() or _recipes_off_redirect()
+    if blocked:
+        return blocked
+    back = _back_param("/recipes/mealdb")
+    category = (request.form.get("category") or "").strip()
+    if category not in mealdb.categories():
+        return redirect(_return_url(back, "Pick a category first", "warn"))
+    started = mealdb.start_import_all(category, recipes.import_recipe, lambda: recipes.imported_ids("themealdb"))
+    msg = f"Importing everything in {category}. You can keep using StockHive meanwhile." if started \
+        else "An import is already running. Wait for it to finish, or cancel it."
+    return redirect(_return_url(back, msg, "ok" if started else "warn"))
+
+
+@app.route("/recipes/mealdb/import-status")
+def mealdb_import_status():
+    if not labels.get_recipes_enabled():
+        return jsonify({"state": "idle"})
+    return jsonify(mealdb.import_status())
+
+
+@app.route("/recipes/mealdb/import-cancel", methods=["POST"])
+def mealdb_import_cancel():
+    blocked = _cross_site_blocked()
+    if blocked:
+        return blocked
+    mealdb.cancel_import()
+    return redirect(_with_status("/recipes/mealdb", "Stopping the import…", "ok"))
 
 
 # ------------------------------------------------------------
@@ -3446,6 +3717,13 @@ def settings_update():
         labels.set_recipes_enabled(request.form.get("recipes_enabled") == "1")
     if request.form.get("recipe_staples") is not None:
         recipes.set_staples(request.form.get("recipe_staples"))
+    if request.form.get("recipe_aliases") is not None:
+        recipes.set_alias_rules(request.form.get("recipe_aliases"))
+    if request.form.get("mealdb_key") is not None:
+        try:
+            mealdb.set_key(request.form.get("mealdb_key"))
+        except ValueError as e:
+            return redirect(_with_status("/settings", str(e), "danger"))
 
     if advertise_ip is not None:
         advertise_ip = advertise_ip.strip()

@@ -351,6 +351,19 @@ def _ensure_recipe_tables(conn):
             recipe_id INTEGER
         );
     """)
+    # Imported recipes (TheMealDB): their original category and cuisine,
+    # for display. NULL for recipes typed in here.
+    _ensure_column(conn, "recipes", "source_category", "source_category TEXT")
+    _ensure_column(conn, "recipes", "source_area", "source_area TEXT")
+    # Full TheMealDB recipe JSON by its ID, fetched once, so browsing a
+    # category again is instant and works without internet.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS mealdb_cache (
+            external_id TEXT PRIMARY KEY,
+            data TEXT NOT NULL,
+            fetched_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
     conn.commit()
 
 # ============================================================
