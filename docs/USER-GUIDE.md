@@ -46,6 +46,7 @@ Something not working? See [Troubleshooting](TROUBLESHOOTING.md).
 | Dim the kitchen screen at night | [12. The kiosk screen](#12-the-kiosk-screen) |
 | Put StockHive on my phone's home screen | [13. Using it on a phone](#13-using-it-on-a-phone) |
 | Hide, restore or delete a node on the launcher | [14. Managing nodes](#14-managing-nodes) |
+| Tag items with ingredient names for recipes | [15. Ingredients (for recipes)](#15-ingredients-for-recipes) |
 
 ---
 
@@ -304,6 +305,8 @@ To open it, go to **Tools**, then **Open Settings**.
   Tap **Save**.
 - **Page Labels:** rename the wording to suit what this node tracks. For example, change
   **Grocery List** to "Part List" for a parts node. Tap **Save Labels**.
+- **Recipes:** turn on ingredient tags for this node. See
+  [15. Ingredients (for recipes)](#15-ingredients-for-recipes).
 
 The other cards (**Advertised Address**, **Launcher**, **Labels & Printer**,
 **Admin Token**, **Device**) are for setup and updates. See [README.md](../README.md)
@@ -430,3 +433,54 @@ To open it, go to the launcher's **Settings** and find the **Nodes** card.
 
 The **Update** and **Update All** buttons on this card, and the admin token they need,
 are explained in [README.md](../README.md#admin-token-updates-restart-shutdown).
+
+---
+
+## 15. Ingredients (for recipes)
+
+**What it's for:** giving each food item a simple ingredient name, like "milk", "eggs" or
+"cheddar", so recipes can be matched to what you have. Product names like
+"Great Value 2% Milk 1 gal" are too specific for that.
+
+### Turn it on
+
+Recipes is off on every node until you turn it on, so nodes for electronics or medicine
+never show it.
+
+1. Go to **Tools**, then **Open Settings**.
+2. On the **Recipes** card, turn on **Recipes** and tap **Save**.
+
+Turning it off again hides everything below. Tags you've already added are kept.
+
+### Tag one item
+
+1. Open the item's **Edit** page.
+2. Type a simple name in **Ingredient (optional)**. As you type, names already used on this
+   node are suggested. Pick one when it fits, so you don't end up with "egg" on one item and
+   "eggs" on another.
+3. Tap **Save**.
+
+Names are saved in lowercase, so "Eggs" and "eggs" are the same.
+
+You can also type the ingredient when you create a new item after scanning it.
+
+**Not an ingredient:** for things like foil or paper towels, tick **Not an ingredient** and tap
+**Save**. To undo it, untick the box on the item's **Edit** page.
+
+### Tag many items at once
+
+1. Go to **Tools** and tap **Tag Ingredients** on the **Recipes** card. The card shows how
+   many items still need a name.
+2. The page lists every item without an ingredient name. Pick a zone at the top to see fewer.
+3. Type a name for as many rows as you like. Leave a row blank to come back to it later.
+4. Tap **Save** on any row, or **Save all** at the bottom. Every row you've typed in is saved
+   together, so nothing you typed is lost.
+5. Tap **Not an ingredient** on a row to take that item off the list.
+
+Saved items drop off the list.
+
+### Search
+
+While Recipes is on, searching **Inventory** (or the launcher) for an ingredient name, like
+"eggs", also finds items tagged with it.
+

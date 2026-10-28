@@ -78,3 +78,13 @@ def get_advertise_ip() -> str:
 
 def set_advertise_ip(value: str) -> None:
     db.set_setting("advertise_ip", value.strip())
+
+
+def get_recipes_enabled() -> bool:
+    """Settings > Recipes. Off unless turned on, so nodes that don't
+    track food (electronics, medicine) never show ingredient fields."""
+    return db.get_setting("recipes_enabled", "0") == "1"
+
+
+def set_recipes_enabled(enabled: bool) -> None:
+    db.set_setting("recipes_enabled", "1" if enabled else "0")

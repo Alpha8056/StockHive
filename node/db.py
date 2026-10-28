@@ -275,6 +275,14 @@ def _migrate(conn):
     # existing row with ON, so current behavior is unchanged on upgrade.
     _ensure_column(conn, "items", "include_in_grocery", "include_in_grocery INTEGER NOT NULL DEFAULT 1")
 
+    # Ingredient tag for Recipes: a simple name like "milk" (trimmed,
+    # lowercase; NULL = not tagged yet). not_ingredient = 1 marks items
+    # that will never have one (foil, batteries), so they leave the
+    # Tag Ingredients list. A separate flag rather than a magic value in
+    # `ingredient`, so every ingredient query stays a plain NULL check.
+    _ensure_column(conn, "items", "ingredient", "ingredient TEXT")
+    _ensure_column(conn, "items", "not_ingredient", "not_ingredient INTEGER NOT NULL DEFAULT 0")
+
     # Undo marker on event_log (the live event table, owned by
     # inventory._ensure_schema — which creates it with this column on
     # fresh installs, so only pre-existing tables need adding to).

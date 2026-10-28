@@ -629,6 +629,143 @@ def get_aisle_map() -> dict:
         conn.close()
 
 
+# ============================================================
+# SECTION: Ingredient tags (Settings > Recipes)
+# items.ingredient is a simple name like "milk" for recipe matching;
+# items.not_ingredient = 1 marks items that will never have one. The two
+# are kept mutually exclusive by set_item_ingredient(). Like aisle, these
+# stay out of get_item_by_barcode()'s positional tuple.
+# ============================================================
+
+INGREDIENT_MAX_LEN = 40
+
+
+def normalize_ingredient(raw):
+    """Trimmed, lowercase, single-spaced, at most INGREDIENT_MAX_LEN
+    characters; None for blank."""
+    value = " ".join((raw or "").split()).lower()[:INGREDIENT_MAX_LEN].strip()
+    return value or None
+
+
+def get_item_ingredient(barcode: str):
+    """(ingredient or None, not_ingredient bool) for an item; supports
+    alias barcodes. (None, False) if the item doesn't exist."""
+    barcode = (barcode or "").strip()
+    canonical = resolve_barcode(barcode)
+    if canonical:
+        barcode = canonical
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT ingredient, not_ingredient FROM items WHERE barcode = ?;", (barcode,))
+        row = cur.fetchone()
+        if not row:
+            return None, False
+        return (row["ingredient"] or None), bool(row["not_ingredient"])
+    finally:
+        conn.close()
+
+
+def _set_ingredient(cur, barcode, ingredient, not_ingredient, log=True) -> bool:
+    """Writes one item's tag with an existing cursor. Marking it "not an
+    ingredient" clears any tag; giving it a tag clears the mark. Logs an
+    "edit" event (Recent Changes) only when something changed, unless the
+    caller logs its own (log=False). Returns True if it changed."""
+    ingredient = None if not_ingredient else normalize_ingredient(ingredient)
+    not_ingredient = 1 if (not_ingredient and not ingredient) else 0
+    cur.execute("SELECT ingredient, not_ingredient FROM items WHERE barcode = ?;", (barcode,))
+    row = cur.fetchone()
+    if not row:
+        raise ValueError("Item not found")
+    if (row["ingredient"] or None) == ingredient and int(row["not_ingredient"]) == not_ingredient:
+        return False
+    cur.execute("UPDATE items SET ingredient = ?, not_ingredient = ? WHERE barcode = ?;",
+                (ingredient, not_ingredient, barcode))
+    if log:
+        _log_event(cur, barcode, "edit", delta=0, source="ui")
+    return True
+
+
+def set_item_ingredient(barcode: str, ingredient, not_ingredient: bool = False, log: bool = True) -> bool:
+    """Sets an item's ingredient tag (or clears it with None/blank), or
+    marks it "not an ingredient". Supports alias barcodes. Returns True if
+    anything changed (and was logged)."""
+    barcode = (barcode or "").strip()
+    if not barcode:
+        raise ValueError("Barcode required")
+    canonical = resolve_barcode(barcode)
+    if canonical:
+        barcode = canonical
+    conn = _connect()
+    try:
+        changed = _set_ingredient(conn.cursor(), barcode, ingredient, not_ingredient, log=log)
+        conn.commit()
+        return changed
+    finally:
+        conn.close()
+
+
+def set_ingredients_bulk(updates) -> int:
+    """Tag Ingredients page: applies [(barcode, ingredient, not_ingredient)]
+    in one transaction, skipping barcodes that no longer exist. Returns how
+    many items changed."""
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        changed = 0
+        for barcode, ingredient, not_ingredient in updates:
+            try:
+                if _set_ingredient(cur, barcode, ingredient, not_ingredient):
+                    changed += 1
+            except ValueError:
+                continue    # deleted since the page loaded
+        conn.commit()
+        return changed
+    finally:
+        conn.close()
+
+
+def get_ingredient_map() -> dict:
+    """barcode -> ingredient for every tagged item (for search)."""
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT barcode, ingredient FROM items WHERE ingredient IS NOT NULL AND ingredient != '';")
+        return {r["barcode"]: r["ingredient"] for r in cur.fetchall()}
+    finally:
+        conn.close()
+
+
+def get_distinct_ingredients() -> list:
+    """Every ingredient name used on this node, sorted (for suggestions).
+    Items marked "not an ingredient" have none, so they never appear."""
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT DISTINCT ingredient FROM items WHERE ingredient IS NOT NULL AND ingredient != '' ORDER BY ingredient;")
+        return [r["ingredient"] for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_untagged_items() -> list:
+    """(barcode, name, location) for items with no ingredient that aren't
+    marked "not an ingredient", by location then name."""
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT barcode, name, location FROM items
+            WHERE (ingredient IS NULL OR ingredient = '') AND not_ingredient = 0
+            ORDER BY location COLLATE NOCASE, name COLLATE NOCASE;
+            """
+        )
+        return [(r["barcode"], r["name"], r["location"]) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
 def get_inventory():
     """
     Returns list of tuples:

@@ -98,6 +98,12 @@
             {{ grocery_switch }}
           </div>
 
+          {% if ingredient_field %}
+          <div class="row">
+            {{ ingredient_field }}
+          </div>
+          {% endif %}
+
           {% if custom %}
           <div class="row fieldRow">
             <label class="fieldRow" style="gap:8px;"><input type="checkbox" name="leftovers" value="1" id="leftoversBox"> Leftovers</label>

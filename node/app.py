@@ -69,6 +69,13 @@ from inventory import (
     get_item_include_in_grocery,
     set_item_include_in_grocery,
     get_aisle_map,
+    get_item_ingredient,
+    set_item_ingredient,
+    set_ingredients_bulk,
+    get_ingredient_map,
+    get_distinct_ingredients,
+    get_untagged_items,
+    INGREDIENT_MAX_LEN,
     add_item,
     increment_existing,
     remove_one,
@@ -1108,6 +1115,10 @@ def resolve_barcode_page():
                 try:
                     include = _form_include_in_grocery()
                     add_item(barcode, name, new_location, include_in_grocery=include is not False)
+                    ingredient_form = _form_ingredient()
+                    if ingredient_form is not None:
+                        # log=False: the "New" row in Recent Changes covers it.
+                        set_item_ingredient(barcode, *ingredient_form, log=False)
                     if expiration_date:
                         update_item_expiration(barcode, expiration_date)
                     if made_date:
@@ -1130,6 +1141,7 @@ def resolve_barcode_page():
         # Generated codes only ever create a new item — hide "Link to existing".
         custom=is_custom_barcode(barcode),
         grocery_switch=Markup(_grocery_switch_html(True)),
+        ingredient_field=Markup(_ingredient_field_html(None, False)) if labels.get_recipes_enabled() else "",
         leftover_default_days=LEFTOVER_DEFAULT_DAYS,
         leftover_max_days=LEFTOVER_MAX_DAYS,
         items=items,
@@ -1280,12 +1292,15 @@ def inventory_page():
     items = get_inventory()
     aliases_by_item = get_all_aliases_by_item()
     photos_map = get_photos_map()
+    ingredient_map = get_ingredient_map() if labels.get_recipes_enabled() else {}
 
     def matches(row):
         barcode, name, location, qty, low, expiration_date = row
         if q:
             haystack = [name.lower(), barcode.lower()]
             haystack += [a.lower() for a in aliases_by_item.get(barcode, [])]
+            if barcode in ingredient_map:
+                haystack.append(ingredient_map[barcode])
             if not any(q in h for h in haystack):
                 return False
         if zone_filter != "All":
@@ -1708,6 +1723,7 @@ def edit_item_page():
     _, name, location, qty, low, expiration_date = item
     photo = get_item_photo(barcode)
     aisle = get_item_aisle(barcode)
+    ingredient_html = _ingredient_field_html(*get_item_ingredient(barcode)) if labels.get_recipes_enabled() else ""
     status_html = _page_status_html()
     back = _back_param()                 # the list page (with filters) we came from
     edit_here = _edit_url(barcode, back)
@@ -1778,6 +1794,7 @@ def edit_item_page():
           <div class="fieldRow">
             <input type="text" name="aisle" value="{_h(aisle or '')}" placeholder="e.g. A3, 7, Produce">
           </div>
+          {ingredient_html}
           <div class="fieldRow" style="margin-top:14px;margin-bottom:14px;">
             <label style="color:var(--muted);font-size:14px;">Photo (optional)</label>
           </div>
@@ -1842,6 +1859,109 @@ def edit_item_page():
     """
 
 
+# ------------------------------------------------------------
+# SUBSECTION: Tag Ingredients (Tools > Recipes)
+# One form for every untagged item. Every Save button submits the whole
+# form, so whatever was typed in other rows is saved too, never lost.
+# ------------------------------------------------------------
+TAG_INGREDIENTS_MAX_ROWS = 2000   # cap on rows read back from one POST
+
+
+@app.route("/tag-ingredients")
+def tag_ingredients_page():
+    if not labels.get_recipes_enabled():
+        return redirect(_with_status("/tools", "Turn on Recipes in Settings first", "warn"))
+    zone_filter = (request.args.get("zone", "All") or "All").strip()
+    items = get_untagged_items()
+    zones = sorted(_locations_map().keys())     # same zone list as Inventory
+    if zone_filter != "All":
+        items = [r for r in items if str(r[2]).startswith(zone_filter)]
+
+    zone_options = "".join(
+        f'<option value="{_h(z)}" {"selected" if z == zone_filter else ""}>{_h(z)}</option>'
+        for z in ["All", *zones]
+    )
+    rows = "".join(
+        f"""
+        <div class="tagRow" data-item="{_h(barcode)}">
+          <input type="hidden" name="barcode_{i}" value="{_h(barcode)}">
+          <div style="flex:1;min-width:160px;"><b>{_h(name)}</b><div class="muted">{_h(location)}</div></div>
+          <input type="text" name="ingredient_{i}" list="ingredientList" maxlength="{INGREDIENT_MAX_LEN}"
+                 placeholder="ingredient" autocomplete="off" style="flex:1;min-width:140px;">
+          <button class="btn" type="submit">Save</button>
+          <button class="btn" type="submit" name="skip" value="{i}" title="Remove it from this list">Not an ingredient</button>
+        </div>
+        """
+        for i, (barcode, name, location) in enumerate(items)
+    ) or '<div class="muted">Every item has an ingredient name, or is marked "Not an ingredient".</div>'
+
+    save_all = '<div class="row"><button class="btn btn-wide" type="submit">Save all</button></div>' if items else ""
+    return f"""
+    {_styles()}{_auto_hide_banner_js()}
+    <style>
+      .tagRow{{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--border);}}
+    </style>
+    <div class="wrap"><div class="container">
+      <header>
+        <div><h1>Tag Ingredients</h1><div class="sub">{len(items)} item{'' if len(items) == 1 else 's'} without an ingredient name</div></div>
+        <a class="btn" href="/tools">Back</a>
+      </header>
+      {_page_status_html()}
+      <div class="card">
+        <div class="muted">Type a simple name, like "milk" or "eggs". Any Save button saves every row you've typed in. Blank rows are skipped.</div>
+        <form method="get" action="/tag-ingredients" class="fieldRow" style="margin-top:10px;">
+          <select name="zone" onchange="this.form.submit()">{zone_options}</select>
+        </form>
+      </div>
+      <div class="card">
+        <form method="post" action="/tag-ingredients?zone={_u(zone_filter)}">
+          <input type="hidden" name="row_count" value="{len(items)}">
+          {_ingredient_datalist_html()}
+          {rows}
+          {save_all}
+        </form>
+      </div>
+    </div></div>
+    """
+
+
+@app.route("/tag-ingredients", methods=["POST"])
+def tag_ingredients_save():
+    if not common_security.same_origin_ok(request):
+        return Response("Blocked: request came from another site.", status=403, mimetype="text/plain")
+    zone_filter = (request.args.get("zone", "All") or "All").strip()
+    back = f"/tag-ingredients?zone={_u(zone_filter)}"
+    if not labels.get_recipes_enabled():
+        return redirect(_with_status("/tools", "Turn on Recipes in Settings first", "warn"))
+    try:
+        row_count = min(int(request.form.get("row_count", "0")), TAG_INGREDIENTS_MAX_ROWS)
+    except ValueError:
+        row_count = 0
+    skip_row = request.form.get("skip", "")
+
+    updates, tagged, skipped = [], 0, 0
+    for i in range(max(row_count, 0)):
+        barcode = (request.form.get(f"barcode_{i}") or "").strip()
+        if not barcode:
+            continue
+        if skip_row == str(i):
+            updates.append((barcode, None, True))
+            skipped += 1
+        elif (request.form.get(f"ingredient_{i}") or "").strip():
+            updates.append((barcode, request.form.get(f"ingredient_{i}"), False))
+            tagged += 1
+
+    if not updates:
+        return redirect(_with_status(back, "Nothing to save. Type an ingredient first.", "warn"))
+    set_ingredients_bulk(updates)
+    parts = []
+    if tagged:
+        parts.append(f"Tagged {tagged} item{'' if tagged == 1 else 's'}")
+    if skipped:
+        parts.append("marked 1 as not an ingredient")
+    return redirect(_with_status(back, ", ".join(parts).capitalize(), "ok"))
+
+
 @app.route("/print-label", methods=["POST"])
 def print_label_route():
     barcode = (request.form.get("barcode", "") or "").strip()
@@ -1896,6 +2016,7 @@ def edit_item_save():
         raw_quantity = request.form.get("quantity")
         raw_orig_quantity = request.form.get("orig_quantity")
         include_in_grocery = _form_include_in_grocery()
+        ingredient_form = _form_ingredient()
         remove_photo = request.form.get("remove_photo") == "1"
         photo_file = request.files.get("photo")
     except RequestEntityTooLarge:
@@ -1955,6 +2076,9 @@ def edit_item_save():
         update_item_name(barcode, new_name)
         update_item_expiration(barcode, expiration_date)
         set_item_aisle(barcode, aisle)
+        # log=False: one "Edited" row covers this whole save.
+        if ingredient_form is not None and set_item_ingredient(barcode, *ingredient_form, log=False):
+            other_changed = True
         if other_changed:
             log_item_edit(barcode)
         # Before the quantity change, so a save that turns the toggle OFF
@@ -2003,6 +2127,42 @@ def _grocery_switch_html(checked: bool) -> str:
           </label>
           <div class="muted" style="margin-top:4px;">Off = never added to the {_h(list_label)}, even at zero.</div>
     """
+
+
+def _ingredient_datalist_html() -> str:
+    """Suggestions from ingredients already used on this node, so tags
+    stay consistent ("eggs", not "egg" on one item and "eggs" on another)."""
+    options = "".join(f'<option value="{_h(i)}">' for i in get_distinct_ingredients())
+    return f'<datalist id="ingredientList">{options}</datalist>'
+
+
+def _ingredient_field_html(ingredient, not_ingredient: bool) -> str:
+    """Edit page / new-item form: "Ingredient (optional)" plus a "Not an
+    ingredient" box. The hidden marker means a form without these fields
+    (Recipes off, or an older cached page) never clears a tag."""
+    return f"""
+          <input type="hidden" name="ingredient_present" value="1">
+          <div class="fieldRow" style="margin-top:14px;margin-bottom:14px;">
+            <label style="color:var(--muted);font-size:14px;" for="ingredientInput">Ingredient (optional)</label>
+          </div>
+          <div class="fieldRow">
+            <input type="text" id="ingredientInput" name="ingredient" list="ingredientList" maxlength="{INGREDIENT_MAX_LEN}"
+                   value="{_h(ingredient or '')}" placeholder="e.g. milk, eggs, cheddar" autocomplete="off">
+            {_ingredient_datalist_html()}
+          </div>
+          <div class="muted" style="margin-top:6px;">A simple name recipes can match. Pick one from the list when it fits, so names stay the same.</div>
+          <label class="fieldRow" style="margin-top:10px;gap:8px;">
+            <input type="checkbox" name="not_ingredient" value="1" {"checked" if not_ingredient else ""}> Not an ingredient
+          </label>
+    """
+
+
+def _form_ingredient():
+    """(ingredient, not_ingredient) from a submitted form, or None if the
+    form didn't include the ingredient fields or Recipes is off."""
+    if not labels.get_recipes_enabled() or request.form.get("ingredient_present") != "1":
+        return None
+    return request.form.get("ingredient", ""), request.form.get("not_ingredient") == "1"
 
 
 def _parse_quantity(raw):
@@ -2464,17 +2624,19 @@ SEARCH_MAX_QUERY = 100
 def api_search():
     """Read-only item search for the launcher's cross-node search. Same
     matching as the Inventory page: case-insensitive "contains" on name,
-    barcode and any linked alias."""
+    barcode, any linked alias, and the ingredient tag when Recipes is on."""
     q = (request.args.get("q", "") or "").strip().lower()[:SEARCH_MAX_QUERY]
     if not q:
         return jsonify({"items": [], "more": False})
 
     aliases_by_item = get_all_aliases_by_item()
     aisle_map = get_aisle_map()
+    ingredient_map = get_ingredient_map() if labels.get_recipes_enabled() else {}
     matches = []
     for barcode, name, location, qty, _low, expiration_date in get_inventory():
         aliases = aliases_by_item.get(barcode, [])
-        if any(q in h.lower() for h in [name, barcode, *aliases]):
+        ingredient = ingredient_map.get(barcode)
+        if any(q in h.lower() for h in [name, barcode, *aliases, *([ingredient] if ingredient else [])]):
             matches.append({
                 "name": name,
                 "barcode": barcode,
@@ -2495,6 +2657,17 @@ def api_search():
 def tools_page():
     status_html = _page_status_html()
     locs = get_locations()
+
+    recipes_card = ""
+    if labels.get_recipes_enabled():
+        untagged = len(get_untagged_items())
+        recipes_card = f"""
+      <div class="card">
+        <h2>Recipes</h2>
+        <div class="muted">{untagged} item{'' if untagged == 1 else 's'} still need{'s' if untagged == 1 else ''} an ingredient name.</div>
+        <div class="row"><a class="btn btn-wide" href="/tag-ingredients">Tag Ingredients</a></div>
+      </div>
+        """
 
     rows = ""
     for l in locs:
@@ -2522,6 +2695,7 @@ def tools_page():
       </header>
 
       {status_html}
+      {recipes_card}
 
       <div class="card">
         <h2>Backup</h2>
@@ -2700,6 +2874,22 @@ def settings_page():
       </div>
 
       <div class="card">
+        <h2>Recipes</h2>
+        <div class="muted">Turn on to tag items with a simple ingredient name, like "milk" or "eggs", for recipes. Turning it off hides this again; tags you've added are kept.</div>
+        <form method="post" action="/settings/update">
+          <input type="hidden" name="recipes_present" value="1">
+          <div class="row">
+            <label class="switchRow">
+              <input type="checkbox" name="recipes_enabled" value="1" {"checked" if labels.get_recipes_enabled() else ""}>
+              <span class="switchTrack" aria-hidden="true"></span>
+              <span>Recipes</span>
+            </label>
+          </div>
+          <div class="row"><button class="btn btn-wide" type="submit">Save</button></div>
+        </form>
+      </div>
+
+      <div class="card">
         <h2>Labels &amp; Printer</h2>
         <div class="muted">Custom barcodes look like <span class="mono">SH-{node_code}-00001</span>. Keep the node code different on every node. Labels print through the print bridge on the kitchen Pi.</div>
         <form method="post" action="/settings/update">
@@ -2854,6 +3044,11 @@ def settings_update():
 
     if launcher_url is not None:
         labels.set_launcher_url(launcher_url)
+
+    # The marker field: an unticked checkbox sends nothing, and other
+    # Settings forms post here too without this one.
+    if request.form.get("recipes_present") == "1":
+        labels.set_recipes_enabled(request.form.get("recipes_enabled") == "1")
 
     if advertise_ip is not None:
         advertise_ip = advertise_ip.strip()
