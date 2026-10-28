@@ -17,7 +17,9 @@ def snapshot() -> dict:
         "theme": labels.get_theme(),
         "launcher_url": mdns_advertise.get_launcher_url(),
         "advertise_ip_override": labels.get_advertise_ip(),
-        "advertised_ip": mdns_advertise.advertised_ip(),
+        # What's actually registered right now (None while waiting for
+        # the network), not what detection would pick if asked again.
+        "advertised_ip": mdns_advertise.registered_ip(),
     }
 
 

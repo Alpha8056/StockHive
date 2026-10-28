@@ -370,17 +370,10 @@ def _get_lan_ip_fallback():
     """
     Tries to determine the Pi's LAN IP without requiring internet.
     This is used so QR codes work from the touchscreen even if the
-    kiosk browser is on 127.0.0.1.
+    kiosk browser is on 127.0.0.1. Same detection as mDNS, but never the
+    Manual override (often a VPN address phones on the LAN can't reach).
     """
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        # Doesn't need to be reachable; no packets are actually sent.
-        s.connect(("1.1.1.1", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
-    except Exception:
-        return "127.0.0.1"
+    return mdns_advertise.detected_lan_ip()
 
 
 def _get_base_url():
@@ -2674,7 +2667,7 @@ def settings_page():
           </div>
           <div class="row"><button class="btn btn-wide" type="submit">Save</button></div>
         </form>
-        <div class="muted" style="margin-top:8px;">Currently broadcasting: <b>{_h(ident['advertised_ip'])}</b>. Leave blank to auto-detect.</div>
+        <div class="muted" style="margin-top:8px;">Currently broadcasting: <b>{_h(ident['advertised_ip'] or 'not yet (waiting for network)')}</b>. Leave blank to auto-detect.</div>
       </div>
 
       <div class="card">

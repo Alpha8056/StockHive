@@ -149,14 +149,17 @@ Avahi or any other extra software installed.
 at `http://<node-ip>/`.
 
 **Likely cause:** the node's address changed (for example, your router gave it a new one).
-A node only works out its address when it starts, so it keeps announcing the old one.
 
-**Fix:**
+**Fix:** current versions of StockHive notice the new address and announce it within about
+a minute, so the tile turns normal again by itself. If it doesn't, or the node runs an older
+version:
 
 1. Restart the node (see [1. Is it running?](#1-is-it-running)). The tile updates within a
    minute or two.
-2. To stop it happening again, give the node a fixed address in your router
-   (often called a **DHCP reservation**).
+2. Update the node (**Settings > Device > Update**) so it handles this by itself next time.
+
+To stop the address changing at all, give the node a fixed address in your router
+(often called a **DHCP reservation**).
 
 A node that really is switched off can take up to about **4 minutes** to turn grey,
 and turns normal again by itself when it's back.
@@ -169,19 +172,28 @@ and turns normal again by itself when it's back.
 - a tile stays **Online** even though that node is switched off
 
 **Likely cause:** the node is announcing itself as `127.0.0.1` (also called **localhost**),
-which means "this same machine". That happens when the node starts before its network is
-ready. When the launcher follows `127.0.0.1`, it reaches whatever runs on **the launcher's
-own machine**, such as a second node installed there. So the tile opens that node, and
-its expiring items are counted twice.
+which means "this same machine". Older versions did this when the node started before its
+network was ready. When the launcher follows `127.0.0.1`, it reaches whatever runs on **the
+launcher's own machine**, such as a second node installed there. So the tile opens that node,
+and its expiring items are counted twice.
 
-**Fix:**
+**Fix:** current versions of StockHive never announce `127.0.0.1`. They wait for the
+network, and announce the real address within about a minute of it coming up. On the node's
+**Settings > Advertised Address** card, **Currently broadcasting** shows
+**not yet (waiting for network)** until then.
+
+**On older versions, or if it doesn't clear:**
 
 1. On the affected node, open **Settings** (type `http://<node-ip>/settings` if its tile
    doesn't open it) and find the **Advertised Address** card.
 2. Read **Currently broadcasting**. If it shows `127.0.0.1`, restart the node
    (see [1. Is it running?](#1-is-it-running)). It detects its address again on start.
-3. If it keeps happening after reboots, type the node's real address in **Manual override**
-   and tap **Save**. Give the node a fixed address in your router first, so this stays right.
+3. Update the node (**Settings > Device > Update**) so it handles this by itself next time.
+4. If it keeps happening, type the node's real address in **Manual override** and tap
+   **Save**. Give the node a fixed address in your router first, so this stays right.
+
+Re-running `setup.sh` (see [12. Re-running setup.sh](#12-re-running-setupsh)) also makes the
+node wait for the network before starting, which helps on machines that boot slowly.
 
 ### Two machines show up as one tile
 
