@@ -72,7 +72,8 @@ cleanup() { [[ -n "$TMP" && -d "$TMP" ]] && rm -rf "$TMP"; return 0; }
 trap cleanup EXIT
 mktmp() { [[ -n "$TMP" ]] || TMP="$(mktemp -d)"; }
 
-b64enc() { base64 < "$1" | tr -d '\n'; }
+# Drops CRs first: on Windows, a CRLF checkout or Windows openssl can add them.
+b64enc() { tr -d '\r' < "$1" | base64 | tr -d '\n'; }
 
 # ---------------------------------------------------------------------------
 # Name checks (must match the CA's name constraints)
@@ -256,10 +257,14 @@ cmd_issue() {
   # sudo). The script itself goes over stdin, so the node needs no copy.
   # Every argument here is checked above or is base64, so it's shell-safe.
   remote() {
-    ssh "$target" "if [ \"\$(id -u)\" -eq 0 ]; then bash -s -- $*; else sudo -n bash -s -- $*; fi" < "$SELF"
+    ssh "$target" "if [ \"\$(id -u)\" -eq 0 ]; then bash -s -- $*; else sudo -n bash -s -- $*; fi" < "$TMP/self.sh"
   }
 
   mktmp
+  # Send an LF-only copy of this script: a Windows checkout can have CRLF
+  # line endings, which break bash on the node. (b64enc strips CRs from
+  # the certificates and nginx template the same way.)
+  tr -d '\r' < "$SELF" > "$TMP/self.sh"
   info "Asking $target for a certificate request..."
   remote node-request ${extra[@]+"${extra[@]}"} > "$TMP/node.csr" \
     || die "The node couldn't make a request. SSH in as root, or a user with passwordless sudo (or use the manual steps in docs/HTTPS.md)."
