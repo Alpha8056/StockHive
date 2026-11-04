@@ -26,3 +26,13 @@ StockHive Claude info.txt
 
 # Real nightly-backup config (only the .example is committed)
 nasbackup/*.conf
+
+# HTTPS (scripts/https-setup.sh): certificates and keys never belong in
+# the repo. The CA lives outside it (~/stockhive-ca) and node certs in
+# /etc/stockhive/tls/; these lines are a safety net for stray copies.
+*.key
+*.crt
+*.csr
+*.srl
+*.pem
+stockhive-ca/

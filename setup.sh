@@ -128,6 +128,32 @@ apt-get install -y python3 python3-pip python3-venv nginx > /dev/null 2>&1
 success "System packages installed."
 
 # =============================================================================
+# NODE HTTPS (optional, set up by scripts/https-setup.sh)
+# The nginx cleanup below removes every enabled site, including the node's
+# HTTPS one. If this node already has a certificate and HTTPS was on, put
+# it back. Nodes without HTTPS are unaffected.
+# =============================================================================
+TLS_DIR=/etc/stockhive/tls
+NODE_HTTPS_PORT=""
+
+keep_node_https() {
+  [[ -f "$TLS_DIR/node.crt" && -f "$TLS_DIR/node.key" && -f "$TLS_DIR/https.env" ]] || return 0
+  grep -q '^HTTPS_ENABLED=1$' "$TLS_DIR/https.env" || return 0
+  local port
+  port=$(sed -n 's/^HTTPS_PORT=\([0-9][0-9]*\)$/\1/p' "$TLS_DIR/https.env")
+  port="${port:-443}"
+  if [[ "$port" == "$NODE_PORT" ]] || { $INSTALL_LAUNCHER && [[ "$port" == "$LAUNCHER_PORT" ]]; }; then
+    warn "HTTPS uses port $port, which is now taken by HTTP, so HTTPS was left off."
+    warn "Turn it back on with a different port: scripts/https-setup.sh issue <user>@<this-node> --port 8443"
+    return 0
+  fi
+  sed "s|__HTTPS_PORT__|$port|g" "$REPO_DIR/nginx/node-https.conf" > /etc/nginx/sites-available/stockpi-node-https.conf
+  ln -sf /etc/nginx/sites-available/stockpi-node-https.conf /etc/nginx/sites-enabled/stockpi-node-https.conf
+  NODE_HTTPS_PORT="$port"
+  success "HTTPS kept on (port $port)."
+}
+
+# =============================================================================
 # NODE INSTALL
 # =============================================================================
 install_node() {
@@ -167,6 +193,7 @@ PYEOF
 
   sed "s|__LISTEN_PORT__|$NODE_PORT|g" "$REPO_DIR/nginx/node.conf" > /etc/nginx/sites-available/stockpi-node.conf
   ln -sf /etc/nginx/sites-available/stockpi-node.conf /etc/nginx/sites-enabled/stockpi-node.conf
+  keep_node_https
 
   sed \
     -e "s|User=kinv|User=$REAL_USER|g" \
@@ -285,6 +312,10 @@ LOCAL_IP=$(hostname -I | awk '{print $1}')
 if $INSTALL_NODE; then
   suffix=""; [[ "$NODE_PORT" != "80" ]] && suffix=":$NODE_PORT"
   echo -e "  Node:     ${CYAN}http://${LOCAL_IP}${suffix}${NC}  (rename/theme any time from /settings)"
+  if [[ -n "$NODE_HTTPS_PORT" ]]; then
+    suffix=""; [[ "$NODE_HTTPS_PORT" != "443" ]] && suffix=":$NODE_HTTPS_PORT"
+    echo -e "  HTTPS:    ${CYAN}https://${LOCAL_IP}${suffix}${NC}"
+  fi
 fi
 if $INSTALL_LAUNCHER; then
   suffix=""; [[ "$LAUNCHER_PORT" != "80" ]] && suffix=":$LAUNCHER_PORT"

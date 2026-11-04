@@ -131,3 +131,4 @@ Backups come from **Tools > Download Backup** or the nightly
 | [common_update.py](common_update.py) | Shared Settings > Update logic (git pull, pip install, restart) |
 | [common_security.py](common_security.py) | Shared same-origin check and admin-token hashing |
 | [nginx/](nginx/), [systemd/](systemd/) | Deployment config used by `setup.sh` |
+| [scripts/https-setup.sh](scripts/https-setup.sh) | Optional HTTPS for nodes with a local CA ([guide](docs/HTTPS.md)) |

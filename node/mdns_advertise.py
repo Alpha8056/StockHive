@@ -16,6 +16,7 @@ from zeroconf import ServiceInfo, ServiceBrowser, ServiceListener, Zeroconf
 
 import db
 import labels
+import tls_info
 
 NODE_SERVICE_TYPE = "_stockpi._tcp.local."
 # Must match launcher/discovery.py exactly. DNS-SD service type labels
@@ -85,17 +86,26 @@ def registered_ip():
 def _build_service_info(port: int, ip: str) -> ServiceInfo:
     node_id = db.get_node_id()
     name = f"{node_id}.{NODE_SERVICE_TYPE}"
+    properties = {
+        "id": node_id,
+        "label": labels.get_node_label(),
+        "theme": labels.get_theme(),
+        "version": VERSION,
+    }
+    # Only when HTTPS is set up (scripts/https-setup.sh). The launcher
+    # ignores fields it doesn't know, so older launchers are unaffected.
+    try:
+        tls_port = tls_info.https_port()
+    except Exception:
+        tls_port = None
+    if tls_port:
+        properties["https_port"] = str(tls_port)
     return ServiceInfo(
         NODE_SERVICE_TYPE,
         name,
         addresses=[socket.inet_aton(ip)],
         port=port,
-        properties={
-            "id": node_id,
-            "label": labels.get_node_label(),
-            "theme": labels.get_theme(),
-            "version": VERSION,
-        },
+        properties=properties,
         # No explicit `server` — it defaults to `name`, which is already
         # globally unique (includes node_id). Setting it to the OS
         # hostname is wrong when a node and a launcher share one machine:

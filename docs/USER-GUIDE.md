@@ -315,6 +315,10 @@ To open it, go to **Tools**, then **Open Settings**.
   **Same as** names and (optionally) a **TheMealDB key**.
   See [15. Ingredients and recipes](#15-ingredients-and-recipes).
 
+- **HTTPS:** shows whether this node has HTTPS (for the phone's live camera scanner),
+  when its certificate expires, and a **Download CA certificate** button for phones.
+  See [HTTPS for nodes](HTTPS.md).
+
 The other cards (**Advertised Address**, **Launcher**, **Labels & Printer**,
 **Admin Token**, **Device**) are for setup and updates. See [README.md](../README.md)
 and [printbridge/README.md](../printbridge/README.md).
@@ -449,7 +453,9 @@ What happens when you tap the button depends on how you opened the node:
   the barcode flat and well lit.
 
 Store barcodes (UPC and EAN) and StockHive's own printed labels (`SH-…`) can both be
-scanned. To set up `https://` for live mode, see [docs/HTTPS.md](HTTPS.md).
+scanned. To set up `https://` for live mode, see [HTTPS for nodes](HTTPS.md). Once
+it's set up, open the node's `https://` address on your phone (launcher tiles still
+open `http://`).
 
 ---
 

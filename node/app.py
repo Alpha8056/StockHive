@@ -28,6 +28,7 @@ import mdns_advertise
 import identity
 import photos
 import label_printer
+import tls_info
 import recipes
 import mealdb
 
@@ -164,6 +165,10 @@ def _kiosk_script_html(launcher_url: str) -> str:
     needs no CORS, and if the launcher is down it just fails to load and
     nothing dims. Skipped until the launcher has actually been found."""
     if not launcher_url.startswith(("http://", "https://")):
+        return ""
+    # On an https:// node page the browser blocks an http:// script anyway
+    # (mixed content). Only phones use HTTPS; the kiosk stays on HTTP.
+    if request.is_secure and launcher_url.startswith("http://"):
         return ""
     src = escape(launcher_url.rstrip("/") + "/kiosk.js", quote=True)
     return f'<script src="{src}" defer></script>'
@@ -3544,6 +3549,7 @@ def settings_page():
         </form>
         <div class="muted" style="margin-top:8px;">Leave blank to use auto-discovery.</div>
       </div>
+      {_https_card_html()}
 
       <div class="card">
         <h2>Page Labels</h2>
@@ -4480,6 +4486,76 @@ def print_inventory():
         </table>
       </div>
     </div></div>"""
+
+
+# ============================================================
+# SECTION: HTTPS (scripts/https-setup.sh)
+# ============================================================
+
+@app.route("/ca.crt")
+def ca_cert_download():
+    """The PUBLIC local-CA certificate, so a phone can trust this node's
+    HTTPS. Served over plain HTTP too (that's how a phone first gets it).
+    Only ever the fixed ca.crt file; tls_info refuses anything that
+    contains a private key."""
+    pem = tls_info.ca_pem()
+    if not pem:
+        return Response("HTTPS isn't set up on this node.\n", status=404, mimetype="text/plain")
+    return Response(pem, mimetype="application/x-x509-ca-cert", headers={
+        "Content-Disposition": 'attachment; filename="StockHive-CA.crt"',
+        "Cache-Control": "no-store",
+    })
+
+
+def _https_card_html() -> str:
+    """Settings card: HTTPS on/off, expiry, covered names, CA download."""
+    docs = "docs/HTTPS.md in the StockHive repo"
+    port = tls_info.https_port()
+    info = tls_info.cert_info()
+    fp = tls_info.ca_fingerprint()
+
+    if not port or not info:
+        off_note = ("HTTPS is off (switched off with node-remove)." if info
+                    else "HTTPS isn't set up on this node.")
+        return f"""
+      <div class="card">
+        <h2>HTTPS</h2>
+        <div class="muted">{off_note} Everything works over HTTP, and phones can scan with
+        photo mode. For the live camera scanner, set up HTTPS: see {docs}.</div>
+      </div>"""
+
+    ip = mdns_advertise.registered_ip() or mdns_advertise.advertised_ip()
+    url = f"https://{ip}{'' if port == 443 else f':{port}'}/"
+    expires = info["expires"].strftime("%Y-%m-%d")
+    days = info["days_left"]
+    warnings = []
+    if days < 0:
+        warnings.append(("danger", "The certificate has expired. Phones will show a warning until you renew it "
+                                   "(scripts/https-setup.sh renew, from your CA machine)."))
+    elif days <= tls_info.WARN_DAYS:
+        warnings.append(("warn", f"The certificate expires in {days} days. Renew it from your CA machine "
+                                 "(scripts/https-setup.sh renew)."))
+    if ip and ip not in info["ips"]:
+        warnings.append(("warn", f"This node's address ({ip}) isn't in the certificate, so phones will show a "
+                                 "warning. Renew it from your CA machine (it picks up the new address)."))
+    # Plain text, not a .status banner (the banner script would auto-hide it).
+    warn_html = "".join(f'<div style="margin-top:10px;font-weight:700;color:var(--{cls});">{_h(msg)}</div>'
+                        for cls, msg in warnings)
+    names = ", ".join(info["dns"] + info["ips"]) or "none"
+    ca_html = ""
+    if fp:
+        ca_html = f"""
+        <div class="row" style="margin-top:12px;"><a class="btn btn-wide" href="/ca.crt">Download CA certificate</a></div>
+        <div class="muted" style="margin-top:6px;">Install it once on each phone (see {docs}).
+        Fingerprint: <span class="mono" style="word-break:break-all;">{_h(fp)}</span></div>"""
+    return f"""
+      <div class="card">
+        <h2>HTTPS</h2>
+        <div class="muted">On: <a href="{_h(url)}" class="mono">{_h(url)}</a> (HTTP still works).</div>
+        <div class="muted" style="margin-top:6px;">Certificate expires <b>{_h(expires)}</b> ({days} days).
+        Covers: <span class="mono">{_h(names)}</span></div>
+        {warn_html}{ca_html}
+      </div>"""
 
 
 @app.route("/qr")

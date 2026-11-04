@@ -32,6 +32,9 @@ For everyday use, see the [User Guide](USER-GUIDE.md). For installing, see the
 | I want to know what re-running `setup.sh` changes | [12. Re-running setup.sh](#12-re-running-setupsh) |
 | The camera button doesn't show on my phone | [13. Phone camera scanning](#13-phone-camera-scanning) |
 | The phone says **Camera is blocked** | [13. Phone camera scanning](#13-phone-camera-scanning) |
+| A node's `https://` page says **Not secure** or shows a certificate warning | [14. HTTPS problems](#14-https-problems) |
+| The camera is still blocked on an `https://` page | [14. HTTPS problems](#14-https-problems) |
+| `https://` stopped working, or `issue` fails | [14. HTTPS problems](#14-https-problems) |
 
 ---
 
@@ -465,4 +468,71 @@ reload the page:
 camera on `https://` pages.
 
 **Fix:** photo mode works fine as it is. For live mode, set up HTTPS as described in
-[HTTPS for nodes](HTTPS.md).
+[HTTPS for nodes](HTTPS.md), then open the node's `https://` address. Launcher tiles
+still open `http://`.
+
+---
+
+## 14. HTTPS problems
+
+Setting up HTTPS is in [HTTPS for nodes](HTTPS.md). On the node,
+`sudo bash scripts/https-setup.sh status` shows whether HTTPS is on, when the
+certificate expires, and which addresses it covers.
+
+### "Not secure" or a certificate warning
+
+**What you see:** opening the node's `https://` page shows **Not Secure**, "This
+connection is not private", or "Your connection is not private".
+
+**Likely causes, and fixes:**
+
+1. **The phone doesn't trust the CA yet.** Do
+   [step 6 of the HTTPS guide](HTTPS.md#6-trust-the-ca-on-each-phone-once-per-phone).
+   On an iPhone, the most commonly missed step is **Settings > General > About >
+   Certificate Trust Settings**: **StockHive Local CA** must be turned on.
+2. **The address isn't in the certificate.** For example, the node got a new IP,
+   or you used an address it doesn't cover (a different IP, or a Tailscale address,
+   which isn't supported). The node's **Settings > HTTPS** card says so. Renew from the CA
+   machine: `bash scripts/https-setup.sh renew root@<node-ip>`.
+3. **The certificate expired.** The **Settings > HTTPS** card says so. Renew it
+   the same way.
+4. **The phone's date and time are wrong.** Turn on automatic date and time.
+5. **You used the `.local` name on Android.** Use the IP address instead.
+6. **A different CA was installed on the phone** (for example, after creating a new
+   one). Compare the fingerprint on **Settings > HTTPS** with the one on the phone
+   (iPhone: **Settings > General > VPN & Device Management > StockHive Local CA >
+   More Details**). Install the CA from the node again.
+
+Don't tap through the warning ("Proceed anyway"). The camera usually stays
+blocked on such a page, and it hides the actual problem.
+
+### Camera still blocked on an `https://` page
+
+**What you see:** the address starts with `https://`, but there's no camera button,
+the button opens the camera app, or the view says **Camera is blocked**.
+
+- **There's a certificate warning or "Not Secure":** fix that first (above).
+  Browsers only treat a page as secure when the certificate is trusted.
+- **Camera is blocked:** the site was denied the camera once. Allow it as in
+  [Camera is blocked](#camera-is-blocked). On iPhone, also check **Settings > Apps >
+  Safari > Camera** is **Ask** or **Allow**.
+- **Opened from the launcher:** tiles open `http://`. Use your saved `https://` address.
+
+### HTTPS stopped working
+
+**What you see:** `https://` won't load at all, but `http://` still works.
+
+- **After re-running `setup.sh` with a new port:** if the HTTP port now clashes with
+  HTTPS, setup leaves HTTPS off and says so. Run `issue` again from the CA machine
+  with `--port 8443`.
+- **After `node-remove`:** run `issue` again from the CA machine.
+- **Check nginx:** on the node, run `sudo nginx -t`. If it reports an error in
+  `stockpi-node-https.conf`, run `issue` again (it rewrites that file), or
+  `sudo bash scripts/https-setup.sh node-remove` to switch HTTPS off.
+
+### `issue` fails with "The node couldn't make a request"
+
+**Likely cause:** SSH logged in as a user who needs a password for `sudo`.
+
+**Fix:** use `root@<node-ip>`, give that user passwordless sudo, or use the
+[manual steps](HTTPS.md#without-ssh) instead.
