@@ -45,11 +45,13 @@ Something not working? See [Troubleshooting](TROUBLESHOOTING.md).
 | Set the weather location or add birthdays | [11. The launcher](#11-the-launcher) |
 | Dim the kitchen screen at night | [12. The kiosk screen](#12-the-kiosk-screen) |
 | Put StockHive on my phone's home screen | [13. Using it on a phone](#13-using-it-on-a-phone) |
+| Scan barcodes with my phone's camera | [13. Using it on a phone](#scanning-with-your-phone) |
 | Hide, restore or delete a node on the launcher | [14. Managing nodes](#14-managing-nodes) |
 | Tag items with ingredient names for recipes | [15. Ingredients and recipes](#15-ingredients-and-recipes) |
 | See which recipes I can make with what I have | [15. Ingredients and recipes](#15-ingredients-and-recipes) |
 | Add a recipe's missing ingredients to the grocery list | [15. Ingredients and recipes](#15-ingredients-and-recipes) |
 | Import recipes from TheMealDB | [15. Ingredients and recipes](#15-ingredients-and-recipes) |
+| Fix the camera button not showing, or a blocked camera | [Troubleshooting](TROUBLESHOOTING.md#13-phone-camera-scanning) |
 
 ---
 
@@ -99,7 +101,8 @@ The chosen location shows in the top-right corner as **Location**.
 ### Add one (+1)
 
 1. Tap the box in the **Scan (+1)** card. It's usually selected already.
-2. Scan the barcode (or type it and tap **Scan**).
+2. Scan the barcode (or type it and tap **Scan**). On a phone, you can tap the
+   camera button instead. See [Scanning with your phone](#scanning-with-your-phone).
 3. A green banner shows the item and its new count, for example `Milk +1(3)`.
    - Tap **Edit item** on the banner to change anything about it straight away.
 
@@ -418,6 +421,35 @@ Your phone needs to be on the same network as StockHive (for example, your home 
 
 This adds a shortcut to the page. It isn't a separate app: it opens in your browser,
 and needs your home network to work.
+
+### Scanning with your phone
+
+**What it's for:** using your phone as a portable barcode scanner, for example
+while you unpack groceries away from the kitchen screen.
+
+On a phone or tablet, a **camera button** appears next to these boxes:
+**Scan (+1)**, **Remove (-1)**, **Scan item to move** (on **Move Location**) and
+**Barcode to link** (on **Edit item**). Computers and the kiosk screen don't show it.
+
+1. Tap the camera button next to the box you want.
+2. Point the camera at the barcode.
+3. The code goes into the box and is submitted, just as if you'd scanned it with a
+   barcode scanner. You'll see the usual green or red banner.
+
+What happens when you tap the button depends on how you opened the node:
+
+- **Live camera** (address starts with `https://`): a full-screen camera view opens
+  with a box in the middle. Hold the barcode inside the box. When it reads, the
+  phone beeps (and vibrates on Android) and the view closes by itself. Tap
+  **Cancel** to close without scanning.
+- **Photo** (address starts with `http://`): phones only allow the live camera on
+  `https://` pages, so the button opens your camera app instead. Take a clear,
+  close photo of the barcode and tap **Use Photo** (or the check mark). If it can't be
+  read, you'll see **Couldn't read barcode, try again**. Get closer and keep
+  the barcode flat and well lit.
+
+Store barcodes (UPC and EAN) and StockHive's own printed labels (`SH-…`) can both be
+scanned. To set up `https://` for live mode, see [docs/HTTPS.md](HTTPS.md).
 
 ---
 

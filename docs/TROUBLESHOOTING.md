@@ -30,6 +30,8 @@ For everyday use, see the [User Guide](USER-GUIDE.md). For installing, see the
 | I run StockHive in a Proxmox container (LXC) | [10. Proxmox LXC notes](#10-proxmox-lxc-notes) |
 | I forgot the admin token | [11. Forgot the admin token](#11-forgot-the-admin-token) |
 | I want to know what re-running `setup.sh` changes | [12. Re-running setup.sh](#12-re-running-setupsh) |
+| The camera button doesn't show on my phone | [13. Phone camera scanning](#13-phone-camera-scanning) |
+| The phone says **Camera is blocked** | [13. Phone camera scanning](#13-phone-camera-scanning) |
 
 ---
 
@@ -419,3 +421,48 @@ but it **does** change some things. Know these before you run it:
 cd ~/StockHive
 sudo bash setup.sh
 ```
+
+---
+
+## 13. Phone camera scanning
+
+How phone scanning works is in the User Guide:
+[Scanning with your phone](USER-GUIDE.md#scanning-with-your-phone).
+
+### The camera button doesn't show
+
+**What you see:** no camera button next to the scan box.
+
+- **On a computer or the kiosk screen:** that's expected. The button only shows on
+  phones and tablets.
+- **On an `https://` page:** the browser has to report a camera. Make sure no other
+  app is using the camera, then reload the page.
+- **Wrong page:** the button is only next to **Scan (+1)**, **Remove (-1)**,
+  **Scan item to move** and **Barcode to link**.
+- **The phone was once marked as the kiosk:** open the launcher on the phone, go to
+  **Settings**, turn off **This device is a kiosk** under **Display**, and open the
+  node from its tile again.
+
+### Camera is blocked
+
+**What you see:** the camera view says **Camera is blocked**.
+
+**Likely cause:** the browser was told not to let this site use the camera.
+
+**Fix:** tap **Take a photo instead** to scan this time, then allow the camera and
+reload the page:
+
+- **iPhone (Safari):** tap **aA** in the address bar, then **Website Settings >
+  Camera > Allow**. Also check **Settings > Apps > Safari > Camera**.
+- **Android (Chrome):** tap the icon to the left of the address, then
+  **Permissions > Camera > Allow**.
+
+### Only photo mode, no live camera
+
+**What you see:** the camera button opens the camera app instead of a live view.
+
+**Likely cause:** the page address starts with `http://`. Phones only allow the live
+camera on `https://` pages.
+
+**Fix:** photo mode works fine as it is. For live mode, set up HTTPS as described in
+[HTTPS for nodes](HTTPS.md).

@@ -16,6 +16,8 @@ piece of it worth keeping — weather — has been rebuilt into the launcher.
 ## Features
 
 - **Scanning:** scan to add (+1) or remove (−1), quantities, zones and shelves (locations)
+- **Phone scanning:** use a phone's camera as the scanner (photo mode over HTTP,
+  live camera over HTTPS; see [docs/HTTPS.md](docs/HTTPS.md))
 - **Grocery & Low Stock:** a grocery list, plus low-stock thresholds per item
 - **Expiring Soon:** expiration dates, with a list of what's expiring, on each node and on the launcher
 - **Item photos**

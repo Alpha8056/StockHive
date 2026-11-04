@@ -714,6 +714,17 @@ def _auto_hide_banner_js():
 
 
 # ------------------------------------------------------------
+# SUBSECTION: Phone camera scanning
+# ------------------------------------------------------------
+def _camscan_js():
+    """Loads static/camscan/camscan.js, which adds a camera button next to
+    each <input data-camscan> on phones/tablets only (never desktops or
+    the kiosk; the script decides, and does nothing elsewhere)."""
+    src = escape(url_for("static", filename="camscan/camscan.js"), quote=True)
+    return f'<script src="{src}" defer></script>'
+
+
+# ------------------------------------------------------------
 # SUBSECTION: Escaping helpers
 # Every user/DB/URL value goes through _h() before landing in HTML
 # (text or attribute), and through _u() before landing in a URL.
@@ -949,7 +960,7 @@ def home():
     page_loaded_at = time.strftime("%Y-%m-%d %H:%M:%S")
     node_label = labels.get_node_label()
     return f"""
-    {_styles()}{_auto_hide_banner_js()}{focus_js}{_return_spot_js()}
+    {_styles()}{_auto_hide_banner_js()}{focus_js}{_return_spot_js()}{_camscan_js()}
     <div class="wrap"><div class="container">
       <header>
         <div><h1>{_h(node_label)} <span style="font-size:13px;font-weight:400;opacity:0.6">v{VERSION}</span></h1><div class="sub">Fast scan, local-first, touchscreen-friendly</div></div>
@@ -971,7 +982,7 @@ def home():
         <h2>Scan (+1)</h2>
         <form method="post" action="/scan?zone={_u(zone)}&shelf={shelf}">
           <div class="fieldRow">
-            <input id="scan_barcode" type="text" name="barcode" placeholder="Scan barcode">
+            <input id="scan_barcode" type="text" name="barcode" placeholder="Scan barcode" data-camscan>
             <button class="btn btn-wide" type="submit">Scan</button>
           </div>
         </form>
@@ -982,7 +993,7 @@ def home():
         <h2>Remove (-1)</h2>
         <form method="post" action="/remove-one?zone={_u(zone)}&shelf={shelf}">
           <div class="fieldRow">
-            <input id="remove_barcode" type="text" name="barcode" placeholder="Scan to remove">
+            <input id="remove_barcode" type="text" name="barcode" placeholder="Scan to remove" data-camscan>
             <button class="btn btn-wide btn-danger" type="submit">Remove</button>
           </div>
         </form>
@@ -1197,7 +1208,7 @@ def move_page():
     status_html = _page_status_html()
 
     return f"""
-    {_styles()}{_auto_hide_banner_js()}
+    {_styles()}{_auto_hide_banner_js()}{_camscan_js()}
     <div class="wrap"><div class="container">
       <div class="card">
         <h2>Move Location</h2>
@@ -1209,7 +1220,7 @@ def move_page():
 
         <form method="post" action="/move-scan?zone={_u(zone)}&shelf={shelf}">
           <div class="fieldRow">
-            <input type="text" name="barcode" placeholder="Scan item to move" autofocus>
+            <input type="text" name="barcode" placeholder="Scan item to move" autofocus data-camscan>
             <button class="btn btn-wide" type="submit">Scan</button>
           </div>
         </form>
@@ -1772,7 +1783,7 @@ def edit_item_page():
     ) or "<div class='muted'>No other barcodes linked yet.</div>"
 
     return f"""
-    {_styles()}{_auto_hide_banner_js()}
+    {_styles()}{_auto_hide_banner_js()}{_camscan_js()}
     <div class="wrap"><div class="container">
       <header>
         <div><h1>Edit Item</h1><div class="sub">Update name, quantity, expiration date &amp; aisle</div></div>
@@ -1836,7 +1847,7 @@ def edit_item_page():
           <input type="hidden" name="barcode" value="{_h(barcode)}">
           {_back_field(back)}
           <div class="fieldRow">
-            <input type="text" name="alias" placeholder="Barcode to link" required>
+            <input type="text" name="alias" placeholder="Barcode to link" required data-camscan>
             <button class="btn btn-warn" type="submit">Link Barcode</button>
           </div>
         </form>

@@ -1,0 +1,83 @@
+/* ============================================================
+   FILE: camscan.css
+   Styles for phone camera scanning. camscan.js links this file only
+   on phones/tablets that aren't the kiosk, and every rule is scoped
+   under html.camscan-on (a class only camscan.js adds), so desktops
+   and the kiosk never load or match any of it.
+   ============================================================ */
+
+/* Scan box + camera button side by side */
+html.camscan-on .camscan-group{ display:inline-flex; align-items:center; gap:8px; max-width:100%; }
+html.camscan-on .camscan-group > input{ flex:1 1 auto; min-width:0; }
+html.camscan-on .camscan-btn{
+  flex:0 0 auto; width:54px; height:52px; padding:0;
+  display:inline-flex; align-items:center; justify-content:center;
+}
+html.camscan-on .camscan-btn svg{ display:block; }
+
+/* Phone portrait: box + camera take the full row, the Scan/Remove
+   button wraps below it (it's already full width at this size). */
+@media (max-width:520px){
+  html.camscan-on .camscan-group{ display:flex; width:100%; }
+}
+
+/* Off-screen file picker (display:none can stop iOS opening it) */
+html.camscan-on .camscan-file{
+  position:fixed; left:-9999px; top:0; width:1px; height:1px; opacity:0;
+}
+
+/* No page scrolling behind the camera view */
+html.camscan-on.camscan-lock, html.camscan-on.camscan-lock body{ overflow:hidden; }
+
+/* Full-screen camera view. Same z-index as the "Apps" button, but added
+   later in the page, so it sits on top of it. */
+html.camscan-on .camscan-overlay{
+  position:fixed; inset:0; z-index:2147483647;
+  background:#000; color:#fff; overflow:hidden;
+  font-family:inherit; -webkit-tap-highlight-color:transparent;
+}
+html.camscan-on .camscan-video{
+  position:absolute; inset:0; width:100%; height:100%; object-fit:cover;
+}
+html.camscan-on .camscan-shade{
+  position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+  pointer-events:none;
+}
+html.camscan-on .camscan-frame{
+  width:min(82vw, 440px); height:min(56vw, 300px);
+  border:3px solid rgba(255,255,255,.9); border-radius:18px;
+  box-shadow:0 0 0 100vmax rgba(0,0,0,.45);
+  transition:border-color .1s ease;
+}
+html.camscan-on .camscan-frame.hit{ border-color:#3ddc84; }
+html.camscan-on .camscan-msg{
+  position:absolute; left:16px; right:16px;
+  top:calc(env(safe-area-inset-top, 0px) + 24px);
+  text-align:center; font-size:18px; font-weight:700; line-height:1.35;
+  text-shadow:0 1px 3px rgba(0,0,0,.8);
+}
+html.camscan-on .camscan-actions{
+  position:absolute; left:16px; right:16px;
+  bottom:calc(env(safe-area-inset-bottom, 0px) + 24px);
+  display:flex; flex-direction:column; gap:12px;
+}
+html.camscan-on .camscan-actions button{
+  appearance:none; -webkit-appearance:none; width:100%; min-height:56px;
+  border-radius:16px; font-size:19px; font-weight:800; font-family:inherit;
+  color:#fff; cursor:pointer;
+}
+html.camscan-on .camscan-actions button[hidden]{ display:none; }
+html.camscan-on .camscan-cancel{ background:rgba(0,0,0,.6); border:2px solid rgba(255,255,255,.75); }
+html.camscan-on .camscan-photo{ background:#1f6feb; border:2px solid #1f6feb; }
+
+/* Small message ("Reading barcode…", "Couldn't read barcode, try again") */
+html.camscan-on .camscan-toast{
+  position:fixed; left:16px; right:16px; z-index:2147483647;
+  bottom:calc(env(safe-area-inset-bottom, 0px) + 20px);
+  padding:14px 16px; border-radius:14px; text-align:center;
+  font-size:17px; font-weight:700;
+  background:rgba(20,20,20,.92); color:#fff; border:1px solid rgba(255,255,255,.25);
+  opacity:0; transform:translateY(8px); pointer-events:none;
+  transition:opacity .2s ease, transform .2s ease;
+}
+html.camscan-on .camscan-toast.show{ opacity:1; transform:none; }
