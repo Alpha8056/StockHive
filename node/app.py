@@ -176,8 +176,24 @@ def _kiosk_script_html(launcher_url: str) -> str:
     return f'<script src="{src}" defer></script>'
 
 
+_VIEWPORT_META = '<meta name="viewport" content="width=device-width, initial-scale=1">'
+
+# Pages that never get the bottom nav: printable views stay clean.
+_NO_NAV_PREFIXES = ("/print/",)
+
+
+def _wants_bottom_nav(html: str) -> bool:
+    # Only pages built on _styles() (it defines --navH and the theme the
+    # bar is drawn with), once, and not on the print views.
+    return ("--navH:" in html
+            and 'class="bottomNav"' not in html
+            and not request.path.startswith(_NO_NAV_PREFIXES))
+
+
 @app.after_request
-def _inject_apps_button(resp: Response):
+def _inject_page_chrome(resp: Response):
+    """Adds, to every HTML page: the Apps button, a mobile viewport tag
+    (if the page has none) and the bottom nav bar (_bottom_nav_html)."""
     try:
         # Don't touch streamed / passthrough responses
         if getattr(resp, "direct_passthrough", False):
@@ -194,21 +210,33 @@ def _inject_apps_button(resp: Response):
             return resp
 
         html = resp.get_data(as_text=True)
+        body_open = re.search(r"<body[^>]*>", html, flags=re.IGNORECASE)
 
-        # Avoid double-injecting if already present
-        if 'id="appsBtn"' in html:
-            return resp
+        # Apps button: right after <body ...> if possible, else first.
+        if 'id="appsBtn"' not in html:
+            btn = _apps_button_html()
+            if body_open:
+                html = html[:body_open.end()] + btn + html[body_open.end():]
+            else:
+                html = btn + html
 
-        btn = _apps_button_html()
+        # Bottom nav: just before </body>, else at the end.
+        if _wants_bottom_nav(html):
+            nav = _bottom_nav_html()
+            close = list(re.finditer(r"</body\s*>", html, flags=re.IGNORECASE))
+            if close:
+                html = html[:close[-1].start()] + nav + html[close[-1].start():]
+            else:
+                html = html + nav
 
-        # Inject right after <body ...> if possible
-        m = re.search(r"<body[^>]*>", html, flags=re.IGNORECASE)
-        if m:
-            insert_at = m.end()
-            html = html[:insert_at] + btn + html[insert_at:]
-        else:
-            # Fallback: just prepend to the document
-            html = btn + html
+        # Viewport: most pages have no <head>, so it goes first in the
+        # document (the parser still places it in the head).
+        if 'name="viewport"' not in html:
+            head_open = re.search(r"<head[^>]*>", html, flags=re.IGNORECASE)
+            if head_open:
+                html = html[:head_open.end()] + _VIEWPORT_META + html[head_open.end():]
+            else:
+                html = _VIEWPORT_META + html
 
         resp.set_data(html)
 
@@ -800,26 +828,28 @@ def _styles():
 
       /* ---------- Bottom nav bar (built from _NAV_MODULES) ----------
          Below the Apps button, camera view and kiosk night overlay
-         (all at the max z-index). The page gets matching bottom
-         padding (.wrap.hasBottomNav) so nothing hides behind it.
-         --navH is the bar's height (without the safe-area inset); the
-         padding and scroll padding are derived from it. */
+         (all at the max z-index). _bottom_nav_html() adds the matching
+         bottom padding / scroll padding and lifts the Undo toast and
+         camera message above it, so nothing hides behind it.
+         --navH is the bar's height (without the safe-area inset). The
+         current page's item is accent-coloured with a top marker. */
       :root{ --navH:66px; }
       .bottomNav{ position:fixed; left:0; right:0; bottom:0; z-index:1000; background:var(--panel);
                   border-top:1px solid var(--border); box-shadow:0 -6px 20px var(--shadow);
                   padding-bottom:env(safe-area-inset-bottom, 0px); }
       .bottomNav ul{ display:flex; max-width:820px; margin:0 auto; padding:0 4px; list-style:none; }
       .bottomNav li{ flex:1 1 0; min-width:0; }
-      .bottomNav a{ display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px;
+      .bottomNav a{ position:relative; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px;
                     min-height:var(--navH); padding:8px 4px; border-radius:12px; color:var(--text); text-decoration:none;
                     font-size:13px; font-weight:800; }
       .bottomNav a:hover{ background:var(--btnHover); }
       .bottomNav a:focus-visible{ outline:3px solid var(--accent); outline-offset:-3px; }
-      .bottomNav svg{ width:26px; height:26px; display:block; color:var(--accent); }
+      .bottomNav a[aria-current="page"]{ color:var(--accent); }
+      .bottomNav a[aria-current="page"]::before{ content:""; position:absolute; top:0; left:22%; right:22%; height:3px;
+                    border-radius:0 0 3px 3px; background:var(--accent); }
+      .bottomNav svg{ width:26px; height:26px; display:block; }
       .navLabel{ max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-      /* Bar height + 24px gap, so the last card (and its Undo) always clears it. */
-      .wrap.hasBottomNav{ padding-bottom:calc(var(--navH) + 24px + env(safe-area-inset-bottom, 0px)); }
-      html:has(.bottomNav){ scroll-padding-bottom:calc(var(--navH) + 24px + env(safe-area-inset-bottom, 0px)); }
+      @media print{ .bottomNav{ display:none !important; } }
       /* Kiosk portrait / desktop: a bigger bar, sized like the location
          tiles. Needs real height too, so a sideways phone keeps the
          phone-size bar. */
@@ -1214,56 +1244,106 @@ def _home_url(zone, shelf, focus='scan', msg="", msgtype="ok", undo=None, print_
         url += f"&edit={_u(edit_code)}"
     return url
 
-def _home_href(zone, shelf, focus='scan', msg="", msgtype="ok"):
-    url = f"/?zone={_u(zone)}&shelf={shelf}&focus={_u(focus)}&msgtype={_u(msgtype)}"
-    if msg:
-        url += f"&msg={_u(msg)}"
-    return url
-
 
 # ============================================================
 # SECTION: Routes — Home + Scan
 # ============================================================
 
 # ------------------------------------------------------------
-# SUBSECTION: Bottom nav (scan page)
+# SUBSECTION: Bottom nav (every page; added by _inject_page_chrome)
 # ------------------------------------------------------------
 # One entry per module. The bar is built from this list alone, so adding,
 # removing or reordering a module here is all it takes. Each entry:
 #   key     - stable id (data-nav attribute)
 #   label   - text, or a function returning it (for user-set labels)
 #   icon    - inline SVG paths (24x24, stroked)
-#   href    - function(zone, shelf) -> URL
+#   href    - function(loc) -> URL; loc is the page's "zone=..&shelf=.."
+#             query (or "" when the page has no location)
+#   pages   - paths that highlight this entry: "=/x" exact, "/x" that
+#             path and anything under "/x/"
 #   enabled - optional function; the entry is hidden when it returns False
+def _with_loc(path: str, loc: str) -> str:
+    return f"{path}?{loc}" if loc else path
+
+
 _NAV_MODULES = [
+    {"key": "scan", "label": "Scan",
+     "icon": ('<path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/>'
+              '<path d="M7 8v8M10 8v8M14 8v8M17 8v8"/>'),
+     "href": lambda loc: _with_loc("/", loc),
+     "pages": ("=/", "/resolve_barcode")},
     {"key": "move", "label": "Move",
      "icon": '<path d="M5 9l-3 3 3 3M19 9l3 3-3 3M2 12h20"/><path d="M9 5l3-3 3 3M9 19l3 3 3-3M12 2v20"/>',
-     "href": lambda zone, shelf: f"/move?{urlencode([('zone', zone), ('shelf', str(shelf))])}"},
+     "href": lambda loc: _with_loc("/move", loc),
+     "pages": ("/move", "/move-scan")},
     {"key": "inventory", "label": "Inventory",
      "icon": '<path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/>',
-     "href": lambda zone, shelf: "/inventory"},
+     "href": lambda loc: "/inventory",
+     "pages": ("/inventory", "/edit", "/stats", "/expiring")},
     {"key": "grocery", "label": lambda: labels.get_labels()["grocery_low_stock"],
      "icon": '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1M9 10h6M9 14h6M9 18h3"/>',
-     "href": lambda zone, shelf: "/grocery-list"},
+     "href": lambda loc: "/grocery-list",
+     "pages": ("/grocery-list", "/share/grocery", "=/export/grocery.txt")},
     {"key": "recipes", "label": "Recipes", "enabled": lambda: labels.get_recipes_enabled(),
      "icon": '<path d="M2 5h6a4 4 0 0 1 4 4v11a3 3 0 0 0-3-3H2z"/><path d="M22 5h-6a4 4 0 0 0-4 4v11a3 3 0 0 1 3-3h7z"/>',
-     "href": lambda zone, shelf: "/recipes"},
+     "href": lambda loc: "/recipes",
+     "pages": ("/recipes",)},
     {"key": "tools", "label": "Tools",
      "icon": _LOCATION_ICONS["tools"][1],
-     "href": lambda zone, shelf: "/tools"},
+     "href": lambda loc: "/tools",
+     "pages": ("/tools", "/settings", "/tag-ingredients", "/debug/events",
+               "=/export/inventory.txt", "=/export/events.txt")},
 ]
 
 
-def _bottom_nav_html(zone, shelf) -> str:
+def _nav_page_matches(path: str, rule: str) -> bool:
+    if rule.startswith("="):
+        return path == rule[1:]
+    return path == rule or path.startswith(rule.rstrip("/") + "/")
+
+
+def _nav_active_key(path: str):
+    for m in _NAV_MODULES:
+        if any(_nav_page_matches(path, r) for r in m.get("pages", ())):
+            return m["key"]
+    return None
+
+
+def _nav_loc_query() -> str:
+    """The current page's location as "zone=..&shelf=..", so Scan and
+    Move return to it; "" when the URL has no zone, or a zone that isn't
+    a location (e.g. the Inventory filter's other values)."""
+    raw = request.args.get("zone")
+    if not raw or raw not in _locations_map():
+        return ""
+    zone, shelf, _loc_map = _selected_zone_shelf()
+    return urlencode([("zone", zone), ("shelf", str(shelf))])
+
+
+def _bottom_nav_html() -> str:
+    loc = _nav_loc_query()
+    active = _nav_active_key(request.path)
     items = ""
     for m in _NAV_MODULES:
         enabled = m.get("enabled")
         if enabled and not enabled():
             continue
         label = m["label"]() if callable(m["label"]) else m["label"]
-        items += (f'<li><a href="{_h(m["href"](zone, shelf))}" data-nav="{_h(m["key"])}" title="{_h(label)}">'
+        current = ' aria-current="page"' if m["key"] == active else ""
+        items += (f'<li><a href="{_h(m["href"](loc))}" data-nav="{_h(m["key"])}" title="{_h(label)}"{current}>'
                   f'{_svg(m["icon"])}<span class="navLabel">{_h(label)}</span></a></li>')
-    return f'<nav class="bottomNav" aria-label="Modules"><ul>{items}</ul></nav>'
+    # The page-level rules live here, not in _styles(), so they only
+    # apply when the bar is actually on the page.
+    clear = "calc(var(--navH) + 24px + env(safe-area-inset-bottom, 0px))"
+    above = "calc(var(--navH) + env(safe-area-inset-bottom, 0px) + 12px)"
+    return f"""<nav class="bottomNav" aria-label="Modules"><ul>{items}</ul></nav>
+<style>
+  .wrap{{ padding-bottom:{clear}; }}
+  html{{ scroll-padding-bottom:{clear}; }}
+  .undoToast{{ bottom:{above}; }}
+  html.camscan-on:not(.camscan-lock) .camscan-toast{{ bottom:{above}; }}
+  @media print{{ .wrap{{ padding-bottom:18px; }} }}
+</style>"""
 
 
 # ------------------------------------------------------------
@@ -1466,9 +1546,8 @@ def home():
     page_loaded_at = time.strftime("%Y-%m-%d %H:%M:%S")
     node_label = labels.get_node_label()
     return f"""
-    <meta name="viewport" content="width=device-width, initial-scale=1">
     {_styles()}{_auto_hide_banner_js()}{_return_spot_js()}{_camscan_js()}
-    <div class="wrap hasBottomNav scanPage"><div class="container">
+    <div class="wrap scanPage"><div class="container">
       <header>
         <div><h1>{_h(node_label)} <span style="font-size:13px;font-weight:400;opacity:0.6">v{VERSION}</span></h1><div class="sub hideOnPhone">Fast scan, local-first, touchscreen-friendly</div></div>
         <div class="muted" style="text-align:right">Location <span class="chip chipAccent">{_h(location)}</span><span class="asOf hideOnPhone">Data as of {page_loaded_at}</span></div>
@@ -1505,7 +1584,6 @@ def home():
       {_last_scanned_html(summary, event_id, zone, shelf, mode)}
 
     </div></div>
-    {_bottom_nav_html(zone, shelf)}
     {_picker_js()}{_scan_page_js()}
     """
 
@@ -1708,7 +1786,6 @@ def move_page():
 
     # Pickers link back to /move (they used to jump to the scan page).
     return f"""
-    <meta name="viewport" content="width=device-width, initial-scale=1">
     {_styles()}{_auto_hide_banner_js()}{_camscan_js()}
     <div class="wrap scanPage"><div class="container">
       <div class="card">
@@ -1726,9 +1803,6 @@ def move_page():
           </div>
         </form>
 
-        <div class="row">
-          <a class="btn" href="{_home_href(zone, shelf, focus='scan')}">Back</a>
-        </div>
       </div>
     </div></div>
     {_picker_js()}
@@ -1912,7 +1986,6 @@ def inventory_page():
     <div class="wrap"><div class="container">
       <header>
         <div><h1>Inventory</h1><div class="sub">Search + filter by zone • Yellow = low stock • Red = out</div></div>
-        <a class="btn" href="/">Home</a>
       </header>
 
       {status_html}
@@ -2529,7 +2602,6 @@ def recipes_page():
       <header>
         <div><h1>Recipes</h1><div class="sub">What you can make with what you have</div></div>
         <div class="fieldRow">
-          <a class="btn" href="/">Home</a>
           <a class="btn" href="/recipes/mealdb">Browse TheMealDB</a>
           <a class="btn btn-warn" href="/recipes/new">Add recipe</a>
         </div>
@@ -2595,7 +2667,6 @@ def recipe_page(recipe_id):
       <header>
         <div><h1>{_h(r['name'])}</h1><div class="sub">{details}</div></div>
         <div class="fieldRow">
-          <a class="btn" href="/recipes">Back</a>
           <a class="btn" href="/recipes/{int(r['id'])}/edit">Edit</a>
         </div>
       </header>
@@ -2918,7 +2989,6 @@ def mealdb_page():
     <div class="wrap"><div class="container">
       <header>
         <div><h1>Browse TheMealDB</h1><div class="sub">Import recipes into this node. Imported recipes work offline.</div></div>
-        <a class="btn" href="/recipes">Back</a>
       </header>
       {_page_status_html()}
       {error_html}
@@ -3076,7 +3146,6 @@ def tag_ingredients_page():
     <div class="wrap"><div class="container">
       <header>
         <div><h1>Tag Ingredients</h1><div class="sub">{len(items)} item{'' if len(items) == 1 else 's'} without an ingredient name</div></div>
-        <a class="btn" href="/tools">Back</a>
       </header>
       {_page_status_html()}
       <div class="card">
@@ -3394,7 +3463,6 @@ def stats_page():
         <div><h1>Stats</h1><div class="sub">Last 28 days (simple local math)</div></div>
         <div class="fieldRow">
           <a class="btn" href="{_h(stats_back)}">Back</a>
-          <a class="btn" href="/">Home</a>
         </div>
       </header>
 
@@ -3484,7 +3552,6 @@ def _grocery_text_lines(include_aisle: bool = True) -> list:
 
 @app.route("/grocery-list")
 def grocery_list_page():
-    zone, shelf, _loc_map = _selected_zone_shelf()
     status_html = _page_status_html()
     aisle_map = get_aisle_map()
     grocery_items = _sort_by_aisle(get_grocery_list(), aisle_map)
@@ -3546,7 +3613,6 @@ def grocery_list_page():
     <div class="wrap"><div class="container">
       <header>
         <div><h1>{_h(L['grocery_low_stock'])}</h1><div class="sub">Everything you need to restock, in one place</div></div>
-        <a class="btn" href="{_home_href(zone, shelf, focus='scan')}">Home</a>
       </header>
 
       {status_html}
@@ -3601,7 +3667,6 @@ def grocery_remove():
 
 @app.route("/expiring")
 def expiring_page():
-    zone, shelf, _loc_map = _selected_zone_shelf()
     status_html = _page_status_html()
     items = get_expiring_items(EXPIRATION_WARN_DAYS)
     here = _here()
@@ -3655,7 +3720,6 @@ def expiring_page():
     <div class="wrap"><div class="container">
       <header>
         <div><h1>Expiring Items</h1><div class="sub">Expired, due today, or within {EXPIRATION_WARN_DAYS} days</div></div>
-        <a class="btn" href="{_home_href(zone, shelf, focus='scan')}">Home</a>
       </header>
 
       {status_html}
@@ -3888,7 +3952,6 @@ def tools_page():
     <div class="wrap"><div class="container">
       <header>
         <div><h1>Tools</h1><div class="sub">Backup / Restore / Locations / Debug</div></div>
-        <a class="btn" href="/">Home</a>
       </header>
 
       {status_html}
@@ -4008,7 +4071,6 @@ def settings_page():
     <div class="wrap"><div class="container">
       <header>
         <div><h1>Settings</h1><div class="sub">Live &mdash; changes apply immediately, no restart</div></div>
-        <a class="btn" href="/tools">Back</a>
       </header>
 
       {status_html}
@@ -4666,7 +4728,6 @@ def debug_events():
       <header>
         <div><h1>Event Log</h1><div class="sub">Most recent events (debug)</div></div>
         <div class="fieldRow">
-          <a class="btn" href="/tools">Back</a>
           <a class="btn" href="/export/events.txt">Export</a>
         </div>
       </header>
@@ -4707,7 +4768,6 @@ def share_grocery():
         <div class="wrap"><div class="container">
           <header>
             <div><h1>Send {_h(L['grocery_list'])} to Phone</h1><div class="sub">QR code</div></div>
-            <a class="btn" href="/grocery-list">Back</a>
           </header>
 
           <div class="card">
@@ -4726,7 +4786,6 @@ def share_grocery():
     <div class="wrap"><div class="container">
       <header>
         <div><h1>Send {_h(L['grocery_list'])} to Phone</h1><div class="sub">Scan this with your phone camera</div></div>
-        <a class="btn" href="/grocery-list">Back</a>
       </header>
 
       <div class="card" style="text-align:center;">
@@ -4755,8 +4814,6 @@ def export_grocery_txt():
       <header>
         <div><h1>Export: {_h(L['grocery_list'])}</h1><div class="sub">Plain text view</div></div>
         <div class="fieldRow">
-          <a class="btn" href="/">Home</a>
-          <a class="btn" href="/grocery-list">Back</a>
           <a class="btn" href="/export/grocery.raw">Download .txt</a>
         </div>
       </header>
@@ -4818,8 +4875,6 @@ def export_inventory_txt():
       <header>
         <div><h1>Export: Inventory</h1><div class="sub">Readable table</div></div>
         <div class="fieldRow">
-          <a class="btn" href="/">Home</a>
-          <a class="btn" href="/inventory">Back</a>
           <a class="btn" href="/export/inventory.raw">Download .txt</a>
         </div>
       </header>
@@ -4901,7 +4956,6 @@ def export_events_txt():
       <header>
         <div><h1>Export: Events</h1><div class="sub">Debug log (most recent first)</div></div>
         <div class="fieldRow">
-          <a class="btn" href="/tools">Back</a>
           <a class="btn" href="/export/events.raw?limit={limit_i}">Download .txt</a>
         </div>
       </header>

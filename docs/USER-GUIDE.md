@@ -77,6 +77,10 @@ shows them as tiles. It also shows the time, the weather, and anything about to 
 
 You can also open a node directly by typing its address, `http://<node-ip>/`.
 
+**Getting around a node:** every node page has a bar along the bottom: **Scan**
+(the home page), **Move**, **Inventory**, your grocery list, **Recipes** (if turned
+on) and **Tools**. The page you're on is highlighted.
+
 **Grey tiles:** a grey tile that says **Offline since …** means the launcher can't
 reach that node right now. It's usually switched off or disconnected. You can't open
 it until it comes back. When it does, the tile turns normal again by itself.
@@ -153,7 +157,8 @@ from the Pantry to the Freezer.
 3. Scan the item and tap **Scan**.
 4. The **Confirm Move** page shows **From** and **To**. Tap **Move**.
 
-Tap **Cancel** or **Back** to leave without moving anything.
+To leave without moving anything, tap **Cancel** on the Confirm Move page, or
+**Scan** in the bar at the bottom.
 
 ---
 
