@@ -529,8 +529,18 @@ def _styles():
       * { box-sizing: border-box; }
       body { margin:0; background: var(--bg); color: var(--text);
              font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
-      .wrap{ min-height:100vh; display:flex; justify-content:center; padding:18px; }
-      .container{ width:100%; max-width:820px; }
+      /* Nothing may make the page wider than the screen: on iOS that
+         rescales the page and leaves position:fixed things (the bottom
+         nav) stranded mid-screen when the toolbar collapses. The column
+         can shrink below its content (min-width:0), the wrapper clips
+         anything sideways (clip; hidden where clip isn't supported),
+         and long words/URLs wrap. Wide tables scroll in .tableScroll. */
+      .wrap{ min-height:100vh; display:flex; justify-content:center; padding:18px;
+             overflow-x:hidden; overflow-x:clip; overflow-wrap:break-word; }
+      .container{ width:100%; max-width:820px; min-width:0; }
+      .chip{ max-width:100%; }
+      .tableScroll{ max-width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; }
+      @media print{ .tableScroll{ overflow:visible; } }
       header{ display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:14px; flex-wrap:wrap; }
       h1{ font-size:28px; margin:0; }
       .sub{ color:var(--muted); font-size:14px; }
@@ -723,6 +733,24 @@ def _styles():
       .switchRow input:focus-visible + .switchTrack{ box-shadow:0 0 0 3px rgba(90,162,255,0.35); }
       .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
       @media (max-width:520px){ h1{font-size:24px;} .btn-wide{width:100%;} }
+
+      /* Tools > Locations: a table on wide screens, one card per
+         location on phones (name + shelves, then icon, then Delete). */
+      @media (max-width:520px){
+        .locTable, .locTable tbody, .locTable tr, .locTable td{ display:block; }
+        .locTable{ border:none; background:none; border-radius:0; }
+        .locTable tr.locHead{ display:none; }
+        .locTable tr{ display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px 12px; align-items:center;
+                      padding:12px; margin-bottom:10px; border:1px solid var(--border); border-radius:14px;
+                      background:rgba(255,255,255,0.02); }
+        .locTable td{ padding:0; border:none; }
+        .locTable .locName{ font-weight:800; overflow-wrap:anywhere; }
+        .locTable .locShelves{ color:var(--muted); font-size:14px; }
+        .locTable .locShelves::before{ content:"Shelves: "; }
+        .locTable .locIconCell, .locTable .locAction{ grid-column:1 / -1; }
+        .locTable .locIconCell select{ width:100%; }
+        .locTable .locAction .btn{ width:100%; }
+      }
 
       /* ---------- Location + shelf pickers (scan page, Move page) ----------
          --cols (set per page from the location count) caps the column
@@ -3633,10 +3661,10 @@ def grocery_list_page():
         <div class="card">
           <h2>Low Stock</h2>
           <div class="muted">Items where 0 &lt; qty &le; low threshold</div>
-          <table style="margin-top:10px;">
+          <div class="tableScroll"><table style="margin-top:10px;">
             <tr><th>Item</th><th>Location</th><th>Qty</th><th>Low</th><th></th></tr>
             {low_rows if low_rows else "<tr><td colspan='5' class='muted'>Nothing is currently low.</td></tr>"}
-          </table>
+          </table></div>
         </div>
       </div>
 
@@ -3725,20 +3753,20 @@ def expiring_page():
       {status_html}
 
       <div class="card">
-        <table>
+        <div class="tableScroll"><table>
           <tr><th>Item</th><th>Location</th><th>Qty</th><th>Date</th><th>Status</th><th></th></tr>
           {rows if rows else "<tr><td colspan='6' class='muted'>Nothing expiring soon.</td></tr>"}
-        </table>
+        </table></div>
       </div>
 
       {"" if not dismissed_rows else f'''
       <div class="card">
         <h2>Dismissed</h2>
         <div class="muted">Alerts you've hidden. Changing an item's expiration date also un-dismisses it automatically.</div>
-        <table style="margin-top:10px;">
+        <div class="tableScroll"><table style="margin-top:10px;">
           <tr><th>Item</th><th>Location</th><th>Qty</th><th>Date</th><th></th></tr>
           {dismissed_rows}
-        </table>
+        </table></div>
       </div>
       '''}
     </div></div>
@@ -3929,16 +3957,16 @@ def tools_page():
         has_shelves = "Yes" if bool(l["has_shelves"]) else "No"
         rows += f"""
         <tr>
-          <td>{_h(name)}</td>
-          <td>{has_shelves}</td>
-          <td>
+          <td class="locName">{_h(name)}</td>
+          <td class="locShelves">{has_shelves}</td>
+          <td class="locIconCell">
             <form class="inline" method="post" action="/locations-icon">
               <input type="hidden" name="name" value="{_h(name)}">
               <select name="icon" aria-label="Icon for {_h(name)}" onchange="this.form.submit()">{_location_icon_options(l["icon"])}</select>
               <noscript><button class="btn" type="submit">Save</button></noscript>
             </form>
           </td>
-          <td>
+          <td class="locAction">
             <form class="inline" method="post" action="/locations-delete">
               <input type="hidden" name="name" value="{_h(name)}">
               <button class="btn btn-danger">Delete</button>
@@ -3993,8 +4021,8 @@ def tools_page():
 
         <div class="row"></div>
 
-        <table>
-          <tr><th>Name</th><th>Has shelves?</th><th>Icon</th><th>Action</th></tr>
+        <table class="locTable">
+          <tr class="locHead"><th>Name</th><th>Has shelves?</th><th>Icon</th><th>Action</th></tr>
           {rows if rows else "<tr><td colspan='4' class='muted'>No locations found.</td></tr>"}
         </table>
 
@@ -4746,10 +4774,10 @@ def debug_events():
       </div>
 
       <div class="card">
-        <table>
+        <div class="tableScroll"><table>
           <tr><th>Time</th><th>Barcode</th><th>Type</th><th>Δ</th><th>Source</th></tr>
           {rows if rows else "<tr><td colspan='5' class='muted'>No events yet.</td></tr>"}
-        </table>
+        </table></div>
       </div>
     </div></div>
     """
@@ -5049,7 +5077,7 @@ def print_inventory():
       <h1 style="margin-bottom:8px;">{_h(labels.get_node_label())}</h1>
       <div class="sub" style="margin-bottom:14px;">Inventory: print this page or Save as PDF on your phone.</div>
       <div class="card">
-        <table>
+        <div class="tableScroll"><table>
           <tr>
             <th>Item</th>
             <th>Location</th>
@@ -5058,7 +5086,7 @@ def print_inventory():
             <th>Barcode</th>
           </tr>
           {rows}
-        </table>
+        </table></div>
       </div>
     </div></div>"""
 
