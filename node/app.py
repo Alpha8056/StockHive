@@ -744,13 +744,42 @@ def _styles():
       .scanField > input[type=text], .scanField > .camscan-group{ flex:1 1 240px; min-width:0; width:auto; }
       .scanField .camscan-group > input[type=text]{ width:100%; }
       .scanField input[type=text]{ font-size:20px; min-height:58px; }
+      /* Follows the mode, same fill and text colour as the toggle's "on" side. */
       .scanSubmit, .scanSubmit:hover{ flex:0 0 auto; min-width:150px; min-height:58px; font-family:inherit; font-size:19px; font-weight:900;
-                    background:var(--accent); border-color:var(--accent); color:var(--onAccent); }
+                    background:var(--ok); border-color:var(--ok); color:var(--onOk); }
       .scanCard.is-remove{ border-color:var(--danger); box-shadow:0 0 0 1px var(--danger), 0 10px 30px var(--shadow); }
       .scanCard.is-remove input[type=text]{ border-color:var(--danger); }
       .scanCard.is-remove .scanSubmit{ background:var(--danger); border-color:var(--danger); color:var(--onDanger); }
       .createLink{ display:inline-flex; align-items:center; min-height:44px; margin-top:6px; color:inherit; text-decoration:underline; text-underline-offset:3px; }
-      @media (max-width:520px){ .scanSubmit{ flex:1 1 100%; } }
+      .asOf{ display:block; font-size:12px; }
+
+      /* Phones: compact pickers and spacing so Location and the barcode
+         field fit on one screen. Kiosk/desktop sizes are unchanged.
+         Location tiles go 3-up with the icon beside the name; names
+         don't break mid-word here, so _picker_js() can spot one that
+         doesn't fit and drop that grid to 2 columns (.is-roomy). */
+      @media (max-width:520px){
+        .locGrid{ gap:8px; grid-template-columns:repeat(auto-fit, minmax(max(96px, calc((100% - (var(--cols) - 1) * 8px) / var(--cols))), 1fr)); }
+        .locGrid.is-roomy{ grid-template-columns:repeat(2, minmax(0, 1fr)); }
+        .locGrid .pickTile{ flex-direction:row; gap:6px; min-height:60px; padding:6px 8px; font-size:15px; }
+        .locGrid .pickIcon svg{ width:22px; height:22px; }
+        .locGrid .pickIcon + .pickName{ text-align:left; }
+        .locGrid .pickName{ overflow-wrap:normal; word-break:normal; }
+        .locGrid.is-roomy .pickName{ overflow-wrap:anywhere; }
+        .shelfGrid{ gap:8px; grid-template-columns:repeat(4, minmax(0, 1fr)); }
+        .shelfGrid .pickTile{ min-height:52px; padding:6px 4px; font-size:15px; }
+        .pickLabel{ margin:10px 0 6px; }
+
+        .wrap.scanPage{ padding-top:12px; padding-left:12px; padding-right:12px; }
+        .scanPage header{ margin-bottom:8px; }
+        .scanPage .hideOnPhone{ display:none; }
+        .scanPage .card{ padding:12px; margin:10px 0; }
+        .scanPage .card h2{ font-size:18px; margin-bottom:8px; }
+        .modeToggle{ margin-bottom:10px; }
+        .modeBtn{ min-height:56px; font-size:18px; }
+        .scanField input[type=text]{ min-height:52px; font-size:18px; }
+        .scanSubmit, .scanSubmit:hover{ flex:1 1 100%; min-height:52px; }
+      }
 
       .lastBody{ display:flex; align-items:center; gap:16px; }
       .lastMain{ flex:1; min-width:0; }
@@ -772,20 +801,33 @@ def _styles():
       /* ---------- Bottom nav bar (built from _NAV_MODULES) ----------
          Below the Apps button, camera view and kiosk night overlay
          (all at the max z-index). The page gets matching bottom
-         padding (.wrap.hasBottomNav) so nothing hides behind it. */
+         padding (.wrap.hasBottomNav) so nothing hides behind it.
+         --navH is the bar's height (without the safe-area inset); the
+         padding and scroll padding are derived from it. */
+      :root{ --navH:66px; }
       .bottomNav{ position:fixed; left:0; right:0; bottom:0; z-index:1000; background:var(--panel);
                   border-top:1px solid var(--border); box-shadow:0 -6px 20px var(--shadow);
                   padding-bottom:env(safe-area-inset-bottom, 0px); }
       .bottomNav ul{ display:flex; max-width:820px; margin:0 auto; padding:0 4px; list-style:none; }
       .bottomNav li{ flex:1 1 0; min-width:0; }
       .bottomNav a{ display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px;
-                    min-height:66px; padding:8px 4px; border-radius:12px; color:var(--text); text-decoration:none;
+                    min-height:var(--navH); padding:8px 4px; border-radius:12px; color:var(--text); text-decoration:none;
                     font-size:13px; font-weight:800; }
       .bottomNav a:hover{ background:var(--btnHover); }
       .bottomNav a:focus-visible{ outline:3px solid var(--accent); outline-offset:-3px; }
       .bottomNav svg{ width:26px; height:26px; display:block; color:var(--accent); }
       .navLabel{ max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-      .wrap.hasBottomNav{ padding-bottom:calc(96px + env(safe-area-inset-bottom, 0px)); }
+      /* Bar height + 24px gap, so the last card (and its Undo) always clears it. */
+      .wrap.hasBottomNav{ padding-bottom:calc(var(--navH) + 24px + env(safe-area-inset-bottom, 0px)); }
+      html:has(.bottomNav){ scroll-padding-bottom:calc(var(--navH) + 24px + env(safe-area-inset-bottom, 0px)); }
+      /* Kiosk portrait / desktop: a bigger bar, sized like the location
+         tiles. Needs real height too, so a sideways phone keeps the
+         phone-size bar. */
+      @media (min-width:521px) and (min-height:600px){
+        :root{ --navH:92px; }
+        .bottomNav a{ gap:6px; font-size:16px; }
+        .bottomNav svg{ width:38px; height:38px; }
+      }
     </style>
     """
 
@@ -1116,19 +1158,35 @@ def _shelf_buttons(base, current_zone, current_shelf, loc_map, extra=None) -> st
 
 
 def _picker_js() -> str:
-    """Widens a lone last location tile to the full row when the screen
-    fits fewer columns than the server's --cols cap. Without JS the
-    grid still works; that one tile is just left on its own."""
+    """On phones, drops a location grid from 3 columns to 2 (.is-roomy)
+    if any name doesn't fit its tile. Then widens a lone last tile to
+    the full row when the screen fits fewer columns than the server's
+    --cols cap. Without JS the grid still works; names are just clipped
+    or that one tile is left on its own."""
     return """
     <script>
     (function() {
+      function colCount(grid) {
+        return getComputedStyle(grid).gridTemplateColumns.split(" ")
+          .filter(function(w) { return parseFloat(w) > 0; }).length;
+      }
+      function nameCutOff(grid) {
+        var names = grid.querySelectorAll(".pickName");
+        for (var i = 0; i < names.length; i++) {
+          var el = names[i];
+          if (el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1) return true;
+        }
+        return false;
+      }
       function fix() {
+        var phone = window.matchMedia && window.matchMedia("(max-width:520px)").matches;
         var grids = document.querySelectorAll(".locGrid");
         for (var g = 0; g < grids.length; g++) {
-          var tiles = grids[g].children, n = tiles.length;
+          var grid = grids[g], tiles = grid.children, n = tiles.length;
+          grid.classList.remove("is-roomy");
           for (var i = 0; i < n; i++) tiles[i].classList.remove("is-wide");
-          var cols = getComputedStyle(grids[g]).gridTemplateColumns.split(" ")
-            .filter(function(w) { return parseFloat(w) > 0; }).length;
+          if (phone && colCount(grid) >= 3 && nameCutOff(grid)) grid.classList.add("is-roomy");
+          var cols = colCount(grid);
           if (cols > 1 && n > cols && n % cols === 1) tiles[n - 1].classList.add("is-wide");
         }
       }
@@ -1188,7 +1246,7 @@ _NAV_MODULES = [
      "icon": '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1M9 10h6M9 14h6M9 18h3"/>',
      "href": lambda zone, shelf: "/grocery-list"},
     {"key": "recipes", "label": "Recipes", "enabled": lambda: labels.get_recipes_enabled(),
-     "icon": '<path d="M4 19V5a2 2 0 0 1 2-2h14v16H6a2 2 0 0 0-2 2zM20 19v2H6"/>',
+     "icon": '<path d="M2 5h6a4 4 0 0 1 4 4v11a3 3 0 0 0-3-3H2z"/><path d="M22 5h-6a4 4 0 0 0-4 4v11a3 3 0 0 1 3-3h7z"/>',
      "href": lambda zone, shelf: "/recipes"},
     {"key": "tools", "label": "Tools",
      "icon": _LOCATION_ICONS["tools"][1],
@@ -1412,8 +1470,8 @@ def home():
     {_styles()}{_auto_hide_banner_js()}{_return_spot_js()}{_camscan_js()}
     <div class="wrap hasBottomNav scanPage"><div class="container">
       <header>
-        <div><h1>{_h(node_label)} <span style="font-size:13px;font-weight:400;opacity:0.6">v{VERSION}</span></h1><div class="sub">Fast scan, local-first, touchscreen-friendly</div></div>
-        <div class="muted" style="text-align:right">Location <span class="chip chipAccent">{_h(location)}</span><br><span style="font-size:12px">Data as of {page_loaded_at}</span></div>
+        <div><h1>{_h(node_label)} <span style="font-size:13px;font-weight:400;opacity:0.6">v{VERSION}</span></h1><div class="sub hideOnPhone">Fast scan, local-first, touchscreen-friendly</div></div>
+        <div class="muted" style="text-align:right">Location <span class="chip chipAccent">{_h(location)}</span><span class="asOf hideOnPhone">Data as of {page_loaded_at}</span></div>
       </header>
 
       {status_html}
