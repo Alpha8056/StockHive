@@ -87,6 +87,7 @@ from inventory import (
     set_quantity,
     undo_event,
     get_undo_offer,
+    get_event_summary,
     get_recent_changes,
     log_item_edit,
     delete_item,
@@ -111,6 +112,7 @@ from inventory import (
     # Locations
     get_locations,
     add_location,
+    set_location_icon,
     delete_location,
 
     # Custom barcodes
@@ -420,9 +422,13 @@ def _get_base_url():
 #                    Recent Changes +/-N, Undo bar). Light-background themes
 #                    need darker ones; the defaults are too pale on white.
 #   hoverBorder    - button hover border.
+#   accent         - the one action/selection colour (selected location
+#                    and shelf, primary buttons, focus rings, nav).
 # Status colours are checked at >= 4.5:1 against both bg (where banners sit)
-# and panel (cards).
-_THEME_DEFAULTS = {"ok": "#39d98a", "warn": "#f7c948", "danger": "#ff4d4d", "hoverBorder": "#39425a"}
+# and panel (cards). The accent is checked at >= 3:1 against bg/panel2 and
+# its text colour (picked by _readable_on) at >= 4.5:1 on it.
+_THEME_DEFAULTS = {"ok": "#39d98a", "warn": "#f7c948", "danger": "#ff4d4d", "hoverBorder": "#39425a",
+                   "accent": "#6ea8ff"}
 
 _KITCHEN_THEMES = {
     "dark":  {"name":"Dark", "scheme":"dark", "bg":"#0f1115","panel":"#151922","panel2":"#111520","text":"#e7e9ee","muted":"#a8b0c2","border":"#2a3142","btn":"#1b2231","btnHover":"#232c3f","input":"#0f1420","shadow":"rgba(0,0,0,0.35)"},
@@ -434,11 +440,11 @@ _KITCHEN_THEMES = {
     "forest": {"name":"Forest", "scheme":"dark", "bg":"#0d1611","panel":"#14211a","panel2":"#101b15","text":"#e3efe6","muted":"#9fbaa8","border":"#27402f","btn":"#1b2c22","btnHover":"#233a2c","input":"#0b130e","shadow":"rgba(0,0,0,0.4)"},
     "ember": {"name":"Ember", "scheme":"dark", "bg":"#16100c","panel":"#201813","panel2":"#1b140f","text":"#f2e7dd","muted":"#c6ab95","border":"#3f2d21","btn":"#2b2018","btnHover":"#37291e","input":"#120d09","shadow":"rgba(0,0,0,0.4)"},
     "high_contrast": {"name":"High Contrast", "scheme":"dark", "bg":"#050505","panel":"#0d0d0d","panel2":"#0a0a0a","text":"#ffffff","muted":"#e6e6e6","border":"#d0d0d0","btn":"#1a1a1a","btnHover":"#2e2e2e","input":"#000000","shadow":"rgba(0,0,0,0.4)",
-              "ok":"#4dff88","warn":"#ffd60a","danger":"#ff6b6b","hoverBorder":"#ffffff"},
+              "ok":"#4dff88","warn":"#ffd60a","danger":"#ff6b6b","hoverBorder":"#ffffff","accent":"#7cc4ff"},
     "light": {"name":"Light", "scheme":"light", "bg":"#f0f2f5","panel":"#ffffff","panel2":"#f7f9fc","text":"#111827","muted":"#6b7280","border":"#d1d5db","btn":"#e5e7eb","btnHover":"#d1d5db","input":"#f9fafb","shadow":"rgba(0,0,0,.12)",
-              "ok":"#137a3a","warn":"#a15c07","danger":"#c81e1e"},
+              "ok":"#137a3a","warn":"#a15c07","danger":"#c81e1e","accent":"#1d4ed8"},
     "sepia": {"name":"Sepia", "scheme":"light", "bg":"#f4ecd8","panel":"#fbf6e9","panel2":"#f6efdd","text":"#3b2f22","muted":"#6b5a46","border":"#d9c8a6","btn":"#ece0c4","btnHover":"#e3d4b4","input":"#fffaf0","shadow":"rgba(80,60,30,.15)",
-              "ok":"#226b30","warn":"#8a5d00","danger":"#b3261e","hoverBorder":"#bfa77c"},
+              "ok":"#226b30","warn":"#8a5d00","danger":"#b3261e","hoverBorder":"#bfa77c","accent":"#1d4ed8"},
 }
 
 DEFAULT_THEME_KEY = "dark"
@@ -451,6 +457,30 @@ def _valid_theme_key(key) -> str:
 def _get_kitchen_theme():
     return _KITCHEN_THEMES[_valid_theme_key(labels.get_theme())]
 
+
+def _rel_luminance(hex_color: str) -> float:
+    h = hex_color.lstrip("#")
+    chans = []
+    for i in (0, 2, 4):
+        v = int(h[i:i + 2], 16) / 255
+        chans.append(v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4)
+    return 0.2126 * chans[0] + 0.7152 * chans[1] + 0.0722 * chans[2]
+
+
+def _readable_on(hex_color: str) -> str:
+    """Near-black or white, whichever reads better on a solid fill of
+    hex_color (WCAG contrast). Used for text on accent/ok/danger fills,
+    so every theme gets a legible label without a per-theme key."""
+    dark, light = "#0b0f14", "#ffffff"
+    try:
+        lum = _rel_luminance(hex_color)
+        on_dark = (lum + 0.05) / (_rel_luminance(dark) + 0.05)
+        on_light = (1.05) / (lum + 0.05)
+        return dark if on_dark >= on_light else light
+    except (ValueError, IndexError):
+        return light
+
+
 def _styles():
     t = _get_kitchen_theme()
     color_scheme = t["scheme"]
@@ -459,6 +489,8 @@ def _styles():
         f"--bg:{t['bg']};--panel:{t['panel']};--panel2:{t['panel2']};"
         f"--text:{t['text']};--muted:{t['muted']};--border:{t['border']};"
         f"--danger:{tv['danger']};--ok:{tv['ok']};--warn:{tv['warn']};"
+        f"--onDanger:{_readable_on(tv['danger'])};--onOk:{_readable_on(tv['ok'])};"
+        f"--accent:{tv['accent']};--onAccent:{_readable_on(tv['accent'])};"
         f"--btn:{t['btn']};--btnHover:{t['btnHover']};--btnHoverBorder:{tv['hoverBorder']};--input:{t['input']};"
         f"--shadow:{t['shadow']};"
         f"color-scheme:{color_scheme};"
@@ -505,7 +537,7 @@ def _styles():
             display:inline-flex; align-items:center; justify-content:center; gap:8px;
             transition:transform .05s ease, background .15s ease, border-color .15s ease; }
       .btn:hover{ background:var(--btnHover); border-color:var(--btnHoverBorder); } .btn:active{ transform: translateY(1px); }
-      .btn-wide{ width:220px; max-width:100%; } .zone-btn{ min-width:150px; }
+      .btn-wide{ width:220px; max-width:100%; }
       .btn-danger{ border-color: rgba(255,77,77,0.35); background: rgba(255,77,77,0.10); }
       .btn-danger:hover{ background: rgba(255,77,77,0.16); border-color: rgba(255,77,77,0.55); }
       .btn-warn{ border-color: rgba(247,201,72,0.35); background: rgba(247,201,72,0.10); }
@@ -513,14 +545,14 @@ def _styles():
       .fieldRow{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
       input[type=text], input[type=password]{ width:min(440px,100%); font-size:18px; padding:12px; border-radius:14px; border:1px solid var(--border);
                         background:var(--input); color:var(--text); outline:none; }
-      input[type=text]:focus, input[type=password]:focus{ border-color: rgba(90,162,255,0.6); box-shadow:0 0 0 3px rgba(90,162,255,0.18); }
+      input[type=text]:focus, input[type=password]:focus{ border-color: var(--accent); box-shadow:0 0 0 3px rgba(90,162,255,0.18); }
       input[type=file]{ color: var(--muted); }
       select, input[type=number]{ font-size:16px; padding:10px 12px; border-radius:12px; border:1px solid var(--border);
               background:var(--input); color:var(--text); outline:none; }
-      select:focus, input[type=number]:focus{ border-color: rgba(90,162,255,0.6); box-shadow:0 0 0 3px rgba(90,162,255,0.18); }
+      select:focus, input[type=number]:focus{ border-color: var(--accent); box-shadow:0 0 0 3px rgba(90,162,255,0.18); }
       input[type=date]{ font-size:16px; padding:10px 12px; border-radius:12px; border:1px solid var(--border);
               background:var(--input); color:var(--text); outline:none; width:min(240px,100%); }
-      input[type=date]:focus{ border-color: rgba(90,162,255,0.6); box-shadow:0 0 0 3px rgba(90,162,255,0.18); }
+      input[type=date]:focus{ border-color: var(--accent); box-shadow:0 0 0 3px rgba(90,162,255,0.18); }
       input[type=date]::-webkit-calendar-picker-indicator{ cursor:pointer; border-radius:6px; padding:4px;
               filter: """ + ("none" if color_scheme == "light" else "invert(0.85)") + """; }
       table{ width:100%; border-collapse:collapse; border:1px solid var(--border); background:rgba(255,255,255,0.02);
@@ -541,7 +573,6 @@ def _styles():
               border:1px solid var(--border); background:rgba(255,255,255,0.03); }
       .item-photo-box svg{ width:40%; height:40%; }
       .item-photo-box img{ width:100%; height:100%; object-fit:cover; display:block; }
-      .navRow{ display:flex; gap:10px; flex-wrap:wrap; margin-top:10px; }
       .twoCol{ display:grid; grid-template-columns: 1fr; gap:12px; }
       @media (min-width: 860px){ .twoCol{ grid-template-columns: 1fr 1fr; } }
 
@@ -663,7 +694,98 @@ def _styles():
       .switchRow input:checked + .switchTrack::after{ transform:translateX(24px); background:#fff; }
       .switchRow input:focus-visible + .switchTrack{ box-shadow:0 0 0 3px rgba(90,162,255,0.35); }
       .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
-      @media (max-width:520px){ h1{font-size:24px;} .btn-wide{width:100%;} .zone-btn{min-width:46%;} }
+      @media (max-width:520px){ h1{font-size:24px;} .btn-wide{width:100%;} }
+
+      /* ---------- Location + shelf pickers (scan page, Move page) ----------
+         --cols (set per page from the location count) caps the column
+         count so rows come out even; each column's min width is the
+         larger of a touch-sized floor and 1/--cols of the row. A lone
+         last tile on narrow screens gets .is-wide from _picker_js(). */
+      .pickLabel{ margin:16px 0 8px; font-size:13px; font-weight:800; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
+      .locGrid{ --cols:4; display:grid; gap:10px;
+                grid-template-columns:repeat(auto-fit, minmax(max(128px, calc((100% - (var(--cols) - 1) * 10px) / var(--cols))), 1fr)); }
+      .shelfGrid{ display:grid; gap:10px; grid-template-columns:repeat(auto-fit, minmax(max(104px, calc((100% - 30px) / 4)), 1fr)); }
+      .pickTile{ display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px;
+                 min-height:92px; padding:10px 8px; border-radius:14px; border:1px solid var(--border);
+                 background:var(--btn); color:var(--text); text-decoration:none; text-align:center;
+                 font-size:17px; font-weight:800; line-height:1.2;
+                 transition:background .15s ease, border-color .15s ease, transform .05s ease; }
+      .pickTile:hover{ background:var(--btnHover); border-color:var(--btnHoverBorder); }
+      .pickTile:active{ transform:translateY(1px); }
+      .pickTile:focus-visible{ outline:3px solid var(--accent); outline-offset:2px; }
+      .pickTile.is-selected, .pickTile.is-selected:hover{ background:var(--accent); border-color:var(--accent); color:var(--onAccent); }
+      .pickTile.is-wide{ grid-column:1 / -1; }
+      .shelfGrid .pickTile{ min-height:64px; font-size:18px; }
+      .pickIcon{ display:flex; } .pickIcon svg{ width:30px; height:30px; display:block; }
+      .pickName{ max-width:100%; overflow-wrap:anywhere; overflow:hidden;
+                 display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+      .chip.chipAccent{ background:var(--accent); border-color:var(--accent); color:var(--onAccent); font-weight:800; }
+
+      /* ---------- Scan page ---------- */
+      /* Flat, darker cards with a firmer edge; helper text pulled 30%
+         toward --text so it clears 4.5:1 on every theme. */
+      .scanPage .card{ background:var(--panel2); border-color:color-mix(in srgb, var(--border) 70%, var(--text)); }
+      .scanPage .card h2{ font-size:20px; }
+      .scanPage .muted{ color:var(--muted); color:color-mix(in srgb, var(--muted) 70%, var(--text)); }
+      .locEmpty{ padding:6px 0; }
+      .locEmpty a{ color:inherit; display:inline-flex; align-items:center; min-height:44px; }
+
+      .modeToggle{ display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px; }
+      .modeBtn{ display:flex; align-items:center; justify-content:center; gap:10px; min-height:64px; padding:8px;
+                border-radius:14px; border:2px solid var(--border); background:var(--btn); text-decoration:none;
+                font-size:20px; font-weight:900; transition:background .15s ease, border-color .15s ease; }
+      .modeBtn svg{ width:24px; height:24px; display:block; flex-shrink:0; }
+      .modeBtn:focus-visible{ outline:3px solid var(--accent); outline-offset:2px; }
+      .modeAdd{ color:var(--ok); } .modeRemove{ color:var(--danger); }
+      .modeAdd.is-on{ background:var(--ok); border-color:var(--ok); color:var(--onOk); }
+      .modeRemove.is-on{ background:var(--danger); border-color:var(--danger); color:var(--onDanger); }
+
+      .scanField{ display:flex; gap:10px; flex-wrap:wrap; align-items:stretch; }
+      .scanField > input[type=text], .scanField > .camscan-group{ flex:1 1 240px; min-width:0; width:auto; }
+      .scanField .camscan-group > input[type=text]{ width:100%; }
+      .scanField input[type=text]{ font-size:20px; min-height:58px; }
+      .scanSubmit, .scanSubmit:hover{ flex:0 0 auto; min-width:150px; min-height:58px; font-family:inherit; font-size:19px; font-weight:900;
+                    background:var(--accent); border-color:var(--accent); color:var(--onAccent); }
+      .scanCard.is-remove{ border-color:var(--danger); box-shadow:0 0 0 1px var(--danger), 0 10px 30px var(--shadow); }
+      .scanCard.is-remove input[type=text]{ border-color:var(--danger); }
+      .scanCard.is-remove .scanSubmit{ background:var(--danger); border-color:var(--danger); color:var(--onDanger); }
+      .createLink{ display:inline-flex; align-items:center; min-height:44px; margin-top:6px; color:inherit; text-decoration:underline; text-underline-offset:3px; }
+      @media (max-width:520px){ .scanSubmit{ flex:1 1 100%; } }
+
+      .lastBody{ display:flex; align-items:center; gap:16px; }
+      .lastMain{ flex:1; min-width:0; }
+      .lastName{ font-size:22px; font-weight:900; overflow-wrap:anywhere; }
+      .lastMeta{ margin-top:6px; display:flex; flex-wrap:wrap; align-items:center; gap:0 14px; }
+      .lastMeta a{ color:inherit; display:inline-flex; align-items:center; min-height:44px; text-underline-offset:3px; }
+      .lastQty{ flex-shrink:0; min-width:88px; text-align:center; }
+      .lastDelta{ display:inline-block; padding:3px 10px; margin-bottom:6px; border-radius:999px; border:1px solid currentColor;
+                  font-size:15px; font-weight:900; }
+      .lastDelta.plus{ color:var(--ok); } .lastDelta.minus{ color:var(--danger); }
+      .lastCard.is-undone .lastDelta{ color:var(--muted); text-decoration:line-through; }
+      .lastQtyNum{ display:block; font-size:42px; font-weight:900; line-height:1; }
+      .lastQtyLabel{ display:block; margin-top:4px; font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
+      .lastActions{ margin-top:14px; }
+      .lastActions form{ margin:0; }
+      .lastUndoBtn{ width:100%; min-height:62px; font-family:inherit; font-size:20px; font-weight:900; }
+      .lastNote{ font-weight:800; }
+
+      /* ---------- Bottom nav bar (built from _NAV_MODULES) ----------
+         Below the Apps button, camera view and kiosk night overlay
+         (all at the max z-index). The page gets matching bottom
+         padding (.wrap.hasBottomNav) so nothing hides behind it. */
+      .bottomNav{ position:fixed; left:0; right:0; bottom:0; z-index:1000; background:var(--panel);
+                  border-top:1px solid var(--border); box-shadow:0 -6px 20px var(--shadow);
+                  padding-bottom:env(safe-area-inset-bottom, 0px); }
+      .bottomNav ul{ display:flex; max-width:820px; margin:0 auto; padding:0 4px; list-style:none; }
+      .bottomNav li{ flex:1 1 0; min-width:0; }
+      .bottomNav a{ display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px;
+                    min-height:66px; padding:8px 4px; border-radius:12px; color:var(--text); text-decoration:none;
+                    font-size:13px; font-weight:800; }
+      .bottomNav a:hover{ background:var(--btnHover); }
+      .bottomNav a:focus-visible{ outline:3px solid var(--accent); outline-offset:-3px; }
+      .bottomNav svg{ width:26px; height:26px; display:block; color:var(--accent); }
+      .navLabel{ max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .wrap.hasBottomNav{ padding-bottom:calc(96px + env(safe-area-inset-bottom, 0px)); }
     </style>
     """
 
@@ -887,44 +1009,147 @@ def _build_location(zone, shelf, loc_map):
     return zone
 
 
-def _zone_buttons(current_zone, current_shelf, loc_map):
-    html = ""
-    for name in sorted(loc_map.keys()):
-        if loc_map.get(name, False):
-            html += f"""<a class="btn zone-btn" href="/?zone={_u(name)}&shelf={current_shelf}">{_h(name)}</a>"""
-        else:
-            html += f"""<a class="btn zone-btn" href="/?zone={_u(name)}">{_h(name)}</a>"""
-    return html
+# ------------------------------------------------------------
+# SUBSECTION: Icons (inline SVG — the kiosk Chromium has no emoji font)
+# ------------------------------------------------------------
+def _svg(paths: str) -> str:
+    return ('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+            'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">'
+            + paths + '</svg>')
 
 
-def _shelf_selector(current_zone, current_shelf, loc_map):
+# Built-in location icons, picked per location on the Tools page and
+# stored by key in locations.icon. Generic on purpose (no food/kitchen
+# assumptions). Dict order = picker order. Keys are stored data: add new
+# ones freely, but don't rename or remove existing keys.
+_LOCATION_ICONS = {
+    "box":         ("Box", '<path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/>'),
+    "shelf":       ("Shelf", '<path d="M4 3v18M20 3v18M4 8h16M4 14h16M4 20h16"/>'),
+    "drawer":      ("Drawer", '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18M10 8h4M10 16h4"/>'),
+    "cabinet":     ("Cabinet", '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M12 3v18M9 11v2M15 11v2"/>'),
+    "closet":      ("Closet / door", '<rect x="5" y="3" width="14" height="18" rx="1"/><path d="M15 12h.01"/>'),
+    "bin":         ("Bin", '<path d="M4 7h16l-1.5 13h-13z"/><path d="M3 7h18M9 4h6"/>'),
+    "archive":     ("Archive", '<rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4"/>'),
+    "layers":      ("Stack", '<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>'),
+    "snowflake":   ("Cold", '<path d="M12 2v20M4.9 7l14.2 10M4.9 17l14.2-10"/><path d="M9 4l3 2 3-2M9 20l3-2 3 2"/>'),
+    "thermometer": ("Temperature", '<path d="M14 14.8V4a2 2 0 0 0-4 0v10.8a4 4 0 1 0 4 0z"/>'),
+    "tools":       ("Tools", '<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.4-.6-.6-2.4z"/>'),
+    "briefcase":   ("Office", '<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M3 13h18"/>'),
+    "house":       ("House / room", '<path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/>'),
+    "garage":      ("Garage", '<path d="M3 21V9l9-6 9 6v12"/><path d="M7 21v-9h10v9M7 15h10M7 18h10"/>'),
+    "car":         ("Vehicle", '<path d="M3 13l2-6h14l2 6v5H3z"/><path d="M3 13h18"/><circle cx="7.5" cy="18" r="1.5"/><circle cx="16.5" cy="18" r="1.5"/>'),
+    "bag":         ("Bag", '<path d="M6 8h12l-1 13H7z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/>'),
+    "tag":         ("Tag", '<path d="M20 12l-8 8-9-9V3h8z"/><circle cx="7.5" cy="7.5" r="1.5"/>'),
+    "star":        ("Star", '<path d="M12 3l2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3 6.5 20.2l1-6.2L3 9.6l6.2-.9z"/>'),
+    "pin":         ("Place", '<path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/>'),
+}
+
+
+def _location_icon_html(key) -> str:
+    entry = _LOCATION_ICONS.get(key or "")
+    return f'<span class="pickIcon">{_svg(entry[1])}</span>' if entry else ""
+
+
+def _location_icon_options(selected="") -> str:
+    """<option>s for an icon <select>: "No icon" plus the built-in set."""
+    opts = f"<option value=''{' selected' if not selected else ''}>No icon</option>"
+    for key, (label, _paths) in _LOCATION_ICONS.items():
+        sel = " selected" if key == selected else ""
+        opts += f"<option value='{_h(key)}'{sel}>{_h(label)}</option>"
+    return opts
+
+
+# ------------------------------------------------------------
+# SUBSECTION: Location + shelf pickers (scan page, Move page)
+# ------------------------------------------------------------
+def _grid_cols(n: int) -> int:
+    """Column cap for n location tiles, so rows come out even: an exact
+    fit if one exists, else any count that doesn't leave one tile alone
+    on the last row. Narrow screens may still fit fewer columns; then
+    _picker_js() widens a lone last tile."""
+    if n <= 4:
+        return max(n, 1)
+    prefs = (4, 3, 5, 2)
+    for c in prefs:
+        if n % c == 0:
+            return c
+    for c in prefs:
+        if n % c != 1:
+            return c
+    return 4
+
+
+def _picker_href(base: str, zone: str, shelf: int, extra) -> str:
+    params = [("zone", zone), ("shelf", str(shelf))] + list(extra or [])
+    return f"{base}?{urlencode(params)}"
+
+
+def _location_grid(base, current_zone, current_shelf, extra=None) -> str:
+    """Big location tiles linking to `base` (the page they're on), so
+    picking one stays on that page. extra = more (key, value) params to
+    carry along (the scan page's mode and last-scanned card)."""
+    locs = get_locations()
+    tiles = ""
+    for loc in locs:
+        name = loc["name"]
+        selected = name == current_zone
+        cls = "pickTile is-selected" if selected else "pickTile"
+        current = ' aria-current="true"' if selected else ""
+        href = _picker_href(base, name, current_shelf, extra)
+        tiles += (f'<a class="{cls}" href="{_h(href)}"{current}>'
+                  f'{_location_icon_html(loc["icon"])}<span class="pickName">{_h(name)}</span></a>')
+    return f'<nav class="locGrid" style="--cols:{_grid_cols(len(locs))}" aria-label="Locations">{tiles}</nav>'
+
+
+def _shelf_buttons(base, current_zone, current_shelf, loc_map, extra=None) -> str:
+    """Large shelf buttons, or nothing at all for a location without shelves."""
     if not loc_map.get(current_zone, False):
-        return "<div class='muted'>Shelf: <span class='chip'>N/A</span></div>"
-
-    options = ""
+        return ""
+    tiles = ""
     for s in SHELVES:
-        selected = "selected" if s == current_shelf else ""
-        options += f"<option value='{s}' {selected}>{s}</option>"
+        selected = s == current_shelf
+        cls = "pickTile is-selected" if selected else "pickTile"
+        current = ' aria-current="true"' if selected else ""
+        href = _picker_href(base, current_zone, s, extra)
+        tiles += f'<a class="{cls}" href="{_h(href)}"{current}>Shelf {s}</a>'
+    return f'<div class="pickLabel" id="shelfLabel">Shelf</div><nav class="shelfGrid" aria-labelledby="shelfLabel">{tiles}</nav>'
 
-    return f"""
-      <div class="row">
-        <form method="get" action="/" class="fieldRow">
-          <input type="hidden" name="zone" value="{_h(current_zone)}">
-          <b>Shelf #:</b>
-          <select name="shelf" onchange="this.form.submit()">
-            {options}
-          </select>
-          <span class="muted">(this zone uses shelves)</span>
-        </form>
-      </div>
+
+def _picker_js() -> str:
+    """Widens a lone last location tile to the full row when the screen
+    fits fewer columns than the server's --cols cap. Without JS the
+    grid still works; that one tile is just left on its own."""
+    return """
+    <script>
+    (function() {
+      function fix() {
+        var grids = document.querySelectorAll(".locGrid");
+        for (var g = 0; g < grids.length; g++) {
+          var tiles = grids[g].children, n = tiles.length;
+          for (var i = 0; i < n; i++) tiles[i].classList.remove("is-wide");
+          var cols = getComputedStyle(grids[g]).gridTemplateColumns.split(" ")
+            .filter(function(w) { return parseFloat(w) > 0; }).length;
+          if (cols > 1 && n > cols && n % cols === 1) tiles[n - 1].classList.add("is-wide");
+        }
+      }
+      window.addEventListener("load", fix);
+      window.addEventListener("resize", fix);
+    })();
+    </script>
     """
 
-def _home_url(zone, shelf, focus='scan', msg="", msgtype="ok", undo=None, print_code=None, edit_code=None):
+def _home_url(zone, shelf, focus='scan', msg="", msgtype="ok", undo=None, print_code=None, edit_code=None, last=None):
     url = f"/?zone={_u(zone)}&shelf={shelf}&focus={_u(focus)}&msgtype={_u(msgtype)}"
     if msg:
         url += f"&msg={_u(msg)}"
     if undo:
         url += f"&undo={int(undo)}"
+    elif last:
+        # Keeps the scan page's "Last scanned" card through an error banner.
+        try:
+            url += f"&last={int(last)}"
+        except (TypeError, ValueError):
+            pass
     if print_code:
         url += f"&print={_u(print_code)}"
     if edit_code:
@@ -942,77 +1167,288 @@ def _home_href(zone, shelf, focus='scan', msg="", msgtype="ok"):
 # SECTION: Routes — Home + Scan
 # ============================================================
 
+# ------------------------------------------------------------
+# SUBSECTION: Bottom nav (scan page)
+# ------------------------------------------------------------
+# One entry per module. The bar is built from this list alone, so adding,
+# removing or reordering a module here is all it takes. Each entry:
+#   key     - stable id (data-nav attribute)
+#   label   - text, or a function returning it (for user-set labels)
+#   icon    - inline SVG paths (24x24, stroked)
+#   href    - function(zone, shelf) -> URL
+#   enabled - optional function; the entry is hidden when it returns False
+_NAV_MODULES = [
+    {"key": "move", "label": "Move",
+     "icon": '<path d="M5 9l-3 3 3 3M19 9l3 3-3 3M2 12h20"/><path d="M9 5l3-3 3 3M9 19l3 3 3-3M12 2v20"/>',
+     "href": lambda zone, shelf: f"/move?{urlencode([('zone', zone), ('shelf', str(shelf))])}"},
+    {"key": "inventory", "label": "Inventory",
+     "icon": '<path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/>',
+     "href": lambda zone, shelf: "/inventory"},
+    {"key": "grocery", "label": lambda: labels.get_labels()["grocery_low_stock"],
+     "icon": '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1M9 10h6M9 14h6M9 18h3"/>',
+     "href": lambda zone, shelf: "/grocery-list"},
+    {"key": "recipes", "label": "Recipes", "enabled": lambda: labels.get_recipes_enabled(),
+     "icon": '<path d="M4 19V5a2 2 0 0 1 2-2h14v16H6a2 2 0 0 0-2 2zM20 19v2H6"/>',
+     "href": lambda zone, shelf: "/recipes"},
+    {"key": "tools", "label": "Tools",
+     "icon": _LOCATION_ICONS["tools"][1],
+     "href": lambda zone, shelf: "/tools"},
+]
+
+
+def _bottom_nav_html(zone, shelf) -> str:
+    items = ""
+    for m in _NAV_MODULES:
+        enabled = m.get("enabled")
+        if enabled and not enabled():
+            continue
+        label = m["label"]() if callable(m["label"]) else m["label"]
+        items += (f'<li><a href="{_h(m["href"](zone, shelf))}" data-nav="{_h(m["key"])}" title="{_h(label)}">'
+                  f'{_svg(m["icon"])}<span class="navLabel">{_h(label)}</span></a></li>')
+    return f'<nav class="bottomNav" aria-label="Modules"><ul>{items}</ul></nav>'
+
+
+# ------------------------------------------------------------
+# SUBSECTION: "Last scanned" card (scan page)
+# ------------------------------------------------------------
+_PLUS_SVG = '<path d="M12 5v14M5 12h14"/>'
+_MINUS_SVG = '<path d="M5 12h14"/>'
+
+
+def _last_scanned_html(summary, event_id, zone, shelf, mode) -> str:
+    """The last +1/-1 made from this page (by event id in the URL), with
+    a big Undo while the server still allows it. Persists through
+    refreshes, location changes and error banners via ?last=."""
+    if not summary:
+        return """
+      <section class="card lastCard" aria-live="polite">
+        <h2>Last scanned</h2>
+        <div class="muted lastEmpty">Scan an item to see it here.</div>
+      </section>
+        """
+
+    extra = [("focus", "remove")] if mode == "remove" else []
+    here = _picker_href("/", zone, shelf, extra + [("last", str(event_id))])
+
+    delta = summary["delta"]
+    gone = summary["finished"] and not summary["undone"]   # leftover deleted
+    if summary["finished"]:
+        delta_html = '<span class="lastDelta minus">Finished</span>'
+    elif delta:
+        sign, cls = ("+", "plus") if delta > 0 else ("&minus;", "minus")
+        delta_html = f'<span class="lastDelta {cls}">{sign}{abs(delta)}</span>'
+    else:
+        delta_html = ""
+
+    meta = ""
+    if summary["location"]:
+        meta += f'<span>{_h(summary["location"])}</span>'
+    if not gone:
+        meta += f'<a href="{_h(_edit_url(summary["barcode"], here))}">Edit item</a>'
+
+    if summary["undone"]:
+        actions = f'<div class="lastNote">Undone &middot; now {summary["qty"]}</div>'
+    elif summary["undoable"]:
+        actions = f"""
+        <form method="post" action="/undo" id="lastUndo" data-seconds-left="{int(summary['seconds_left'])}"
+              onsubmit="this.querySelector('button').disabled = true;">
+          <input type="hidden" name="event_id" value="{int(event_id)}">
+          <input type="hidden" name="next" class="keepMode" value="{_h(here)}">
+          <button class="btn lastUndoBtn" type="submit">&#8630; Undo</button>
+        </form>"""
+    else:
+        actions = '<div class="muted">Undo is no longer available for this change.</div>'
+
+    cls = "card lastCard is-undone" if summary["undone"] else "card lastCard"
+    return f"""
+      <section class="{cls}" aria-live="polite">
+        <h2>Last scanned</h2>
+        <div class="lastBody">
+          <div class="lastMain">
+            <div class="lastName">{_h(summary['name'])}</div>
+            <div class="muted lastMeta">{meta}</div>
+          </div>
+          <div class="lastQty">
+            {delta_html}
+            <span class="lastQtyNum">{summary['qty']}</span>
+            <span class="lastQtyLabel">{'removed' if gone else 'now'}</span>
+          </div>
+        </div>
+        <div class="lastActions">{actions}</div>
+      </section>
+    """
+
+
+def _scan_page_js() -> str:
+    """Add/Remove mode toggle, autofocus, Remove-mode idle revert and the
+    Undo countdown. The toggle buttons are real links (?focus=remove), so
+    without JS they still switch mode with a reload."""
+    return """
+    <script>
+    (function() {
+      var REMOVE_IDLE_MS = 60000;   // Remove mode goes back to Add after this long idle
+      var form = document.getElementById("scanForm");
+      if (!form) return;
+      var card = document.getElementById("scanCard");
+      var input = document.getElementById("scan_barcode");
+      var submit = document.getElementById("scanSubmit");
+      var btns = document.querySelectorAll(".modeBtn");
+      var mode = form.getAttribute("data-mode");
+      var idleTimer = null;
+
+      function withMode(href, m) {
+        try {
+          var u = new URL(href, location.href);
+          if (m === "remove") u.searchParams.set("focus", "remove");
+          else u.searchParams.delete("focus");
+          return u.pathname + u.search + u.hash;
+        } catch (e) { return href; }
+      }
+
+      function armIdle() {
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = null;
+        if (mode === "remove") idleTimer = setTimeout(function() { setMode("scan", false); }, REMOVE_IDLE_MS);
+      }
+
+      function setMode(m, focusField) {
+        mode = m;
+        form.setAttribute("data-mode", m);
+        form.action = form.getAttribute("data-action-" + m);
+        card.classList.toggle("is-remove", m === "remove");
+        submit.textContent = m === "remove" ? "Remove" : "Add";
+        input.placeholder = m === "remove" ? "Scan to remove" : "Scan to add";
+        for (var i = 0; i < btns.length; i++) {
+          var on = btns[i].getAttribute("data-mode") === m;
+          btns[i].classList.toggle("is-on", on);
+          btns[i].setAttribute("aria-checked", on ? "true" : "false");
+        }
+        // Location/shelf links, the Undo return path and a refresh all keep the mode.
+        var links = document.querySelectorAll(".scanPage .pickTile");
+        for (var j = 0; j < links.length; j++) links[j].setAttribute("href", withMode(links[j].getAttribute("href"), m));
+        var keeps = document.querySelectorAll(".scanPage input.keepMode");
+        for (var k = 0; k < keeps.length; k++) keeps[k].value = withMode(keeps[k].value, m);
+        try { history.replaceState(history.state, "", withMode(location.href, m)); } catch (e) {}
+        armIdle();
+        if (focusField) input.focus({ preventScroll: true });
+      }
+
+      for (var i = 0; i < btns.length; i++) {
+        btns[i].addEventListener("click", function(e) {
+          e.preventDefault();
+          setMode(this.getAttribute("data-mode"), true);
+        });
+      }
+      // Any activity (including a wedge scanner's keystrokes) restarts the idle clock.
+      ["keydown", "pointerdown", "input"].forEach(function(type) {
+        document.addEventListener(type, function() { if (mode === "remove") armIdle(); }, true);
+      });
+      armIdle();
+
+      window.addEventListener("load", function() {
+        input.focus({ preventScroll: true });
+        input.select();
+      });
+
+      // Swap the Undo button for a note once the server would refuse it.
+      var undo = document.getElementById("lastUndo");
+      if (undo) {
+        var secs = parseInt(undo.getAttribute("data-seconds-left"), 10) || 0;
+        setTimeout(function() {
+          var note = document.createElement("div");
+          note.className = "muted";
+          note.textContent = "Undo is no longer available for this change.";
+          if (undo.parentNode) undo.parentNode.replaceChild(note, undo);
+        }, secs * 1000);
+      }
+    })();
+    </script>
+    """
+
+
 @app.route("/")
 def home():
     zone, shelf, loc_map = _selected_zone_shelf()
     location = _build_location(zone, shelf, loc_map)
-    # Whitelisted: this lands inside a <script> block.
-    focus = "remove" if request.args.get("focus") == "remove" else "scan"
-    status_html = _page_status_html()
+    mode = "remove" if request.args.get("focus") == "remove" else "scan"
+    has_locations = bool(get_locations())
+    if not has_locations:
+        location = "None yet"   # don't show _locations_map()'s internal fallback name
 
-    focus_js = f"""
-    <script>
-      window.onload = function() {{
-        var focusTarget = "{focus}";
-        var el = null;
-        if (focusTarget === "remove") el = document.getElementById("remove_barcode");
-        else el = document.getElementById("scan_barcode");
-        if (el) {{ el.focus({{ preventScroll: true }}); el.select(); }}
-      }};
-    </script>
-    """
+    # "Last scanned": ?undo= is a change just made here, ?last= one kept
+    # from earlier (through an Undo, a location change or an error).
+    fresh_id = request.args.get("undo")
+    event_id = fresh_id or request.args.get("last")
+    summary = get_event_summary(event_id) if event_id else None
+
+    # The card already says what a scan did, so its banner would only
+    # repeat it (and push the page down on every scan). Errors, warnings
+    # and other messages (e.g. an Edit-page save) still show.
+    if (summary and fresh_id and summary["kind"] in ("add", "remove", "finish")
+            and request.args.get("msgtype") != "warn"):
+        status_html = ""
+    else:
+        status_html = _page_status_html()
+
+    extra = [("focus", "remove")] if mode == "remove" else []
+    if summary:
+        extra.append(("last", str(int(event_id))))
+
+    if has_locations:
+        location_body = _location_grid("/", zone, shelf, extra) + _shelf_buttons("/", zone, shelf, loc_map, extra)
+    else:
+        location_body = ('<div class="muted locEmpty">No locations yet. '
+                         '<a href="/tools">Add one in Tools &rarr;</a></div>')
+
+    zq = f"zone={_u(zone)}&shelf={shelf}"
+    action_scan, action_remove = f"/scan?{zq}", f"/remove-one?{zq}"
+    is_remove = mode == "remove"
+    last_field = f'<input type="hidden" name="last" value="{int(event_id)}">' if summary else ""
 
     page_loaded_at = time.strftime("%Y-%m-%d %H:%M:%S")
     node_label = labels.get_node_label()
     return f"""
-    {_styles()}{_auto_hide_banner_js()}{focus_js}{_return_spot_js()}{_camscan_js()}
-    <div class="wrap"><div class="container">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    {_styles()}{_auto_hide_banner_js()}{_return_spot_js()}{_camscan_js()}
+    <div class="wrap hasBottomNav scanPage"><div class="container">
       <header>
         <div><h1>{_h(node_label)} <span style="font-size:13px;font-weight:400;opacity:0.6">v{VERSION}</span></h1><div class="sub">Fast scan, local-first, touchscreen-friendly</div></div>
-        <div class="muted" style="text-align:right">Location <span class="chip">{_h(location)}</span><br><span style="font-size:12px">Data as of {page_loaded_at}</span></div>
+        <div class="muted" style="text-align:right">Location <span class="chip chipAccent">{_h(location)}</span><br><span style="font-size:12px">Data as of {page_loaded_at}</span></div>
       </header>
 
       {status_html}
-      {_undo_toast_html()}
       {_expiring_nav_html()}
 
-      <div class="card">
+      <section class="card">
         <h2>Location</h2>
-        <div class="muted">Pick a zone. Some zones have shelves.</div>
-        <div class="row">{_zone_buttons(zone, shelf, loc_map)}</div>
-        {_shelf_selector(zone, shelf, loc_map)}
-      </div>
+        {location_body}
+      </section>
 
-      <div class="card">
-        <h2>Scan (+1)</h2>
-        <form method="post" action="/scan?zone={_u(zone)}&shelf={shelf}">
-          <div class="fieldRow">
-            <input id="scan_barcode" type="text" name="barcode" placeholder="Scan barcode" data-camscan>
-            <button class="btn btn-wide" type="submit">Scan</button>
+      <section class="card scanCard{' is-remove' if is_remove else ''}" id="scanCard">
+        <h2>Scan</h2>
+        <div class="modeToggle" role="radiogroup" aria-label="Scan mode">
+          <a class="modeBtn modeAdd{'' if is_remove else ' is-on'}" data-mode="scan" role="radio"
+             aria-checked="{'false' if is_remove else 'true'}" href="{_h(_picker_href('/', zone, shelf, [p for p in extra if p[0] != 'focus']))}">{_svg(_PLUS_SVG)}Add</a>
+          <a class="modeBtn modeRemove{' is-on' if is_remove else ''}" data-mode="remove" role="radio"
+             aria-checked="{'true' if is_remove else 'false'}" href="{_h(_picker_href('/', zone, shelf, [('focus', 'remove')] + [p for p in extra if p[0] != 'focus']))}">{_svg(_MINUS_SVG)}Remove</a>
+        </div>
+        <form method="post" id="scanForm" action="{_h(action_remove if is_remove else action_scan)}"
+              data-mode="{mode}" data-action-scan="{_h(action_scan)}" data-action-remove="{_h(action_remove)}">
+          {last_field}
+          <div class="scanField">
+            <input id="scan_barcode" type="text" name="barcode" placeholder="{'Scan to remove' if is_remove else 'Scan to add'}"
+                   aria-label="Barcode" autocomplete="off" data-camscan>
+            <button class="btn scanSubmit" id="scanSubmit" type="submit">{'Remove' if is_remove else 'Add'}</button>
           </div>
         </form>
-        <div class="muted row"><a class="muted" style="text-decoration:underline;" href="/custom-barcode?zone={_u(zone)}&shelf={shelf}">No barcode? Create one &rarr;</a></div>
-      </div>
+        <a class="muted createLink" href="/custom-barcode?{zq}">No barcode? Create one &rarr;</a>
+      </section>
 
-      <div class="card">
-        <h2>Remove (-1)</h2>
-        <form method="post" action="/remove-one?zone={_u(zone)}&shelf={shelf}">
-          <div class="fieldRow">
-            <input id="remove_barcode" type="text" name="barcode" placeholder="Scan to remove" data-camscan>
-            <button class="btn btn-wide btn-danger" type="submit">Remove</button>
-          </div>
-        </form>
-      </div>
-
-      <div class="navRow">
-        <a class="btn btn-wide" href="/move?zone={_u(zone)}&shelf={shelf}">Move Location</a>
-        <a class="btn btn-wide" href="/inventory">Inventory</a>
-        <a class="btn btn-wide" href="/grocery-list">{_h(labels.get_labels()['grocery_low_stock'])}</a>
-        {'<a class="btn btn-wide" href="/recipes">Recipes</a>' if labels.get_recipes_enabled() else ''}
-        <a class="btn btn-wide" href="/tools">Tools</a>
-      </div>
+      {_last_scanned_html(summary, event_id, zone, shelf, mode)}
 
     </div></div>
+    {_bottom_nav_html(zone, shelf)}
+    {_picker_js()}{_scan_page_js()}
     """
 
 
@@ -1023,7 +1459,7 @@ def scan():
 
     barcode = (request.form.get("barcode", "") or "").strip()
     if not barcode:
-        return redirect(_home_url(zone, shelf, focus='scan', msg="Barcode required", msgtype="danger"))
+        return redirect(_home_url(zone, shelf, focus='scan', msg="Barcode required", msgtype="danger", last=request.form.get("last")))
 
     item = get_item_by_barcode(barcode)
     if item:
@@ -1074,11 +1510,11 @@ def resolve_barcode_page():
     # If it already resolves, treat it as known and just add +1
     canonical = resolve_barcode(barcode)
     if canonical:
-        increment_existing(canonical)
+        event_id = increment_existing(canonical)
         item = get_item_by_barcode(canonical)
         name = item[1] if item else canonical
         new_qty = int(item[3]) if item else "?"
-        return redirect(_home_url(zone, shelf, focus='scan', msg=f"{name} +1({new_qty})", msgtype="ok", edit_code=canonical))
+        return redirect(_home_url(zone, shelf, focus='scan', msg=f"{name} +1({new_qty})", msgtype="ok", undo=event_id, edit_code=canonical))
 
     error = None
 
@@ -1191,11 +1627,11 @@ def remove_one_route():
         shelf = _selected_zone_shelf()[1]
     barcode = (request.form.get("barcode", "") or "").strip()
     if not barcode:
-        return redirect(_home_url(zone, shelf, focus="remove", msg="Barcode required", msgtype="danger"))
+        return redirect(_home_url(zone, shelf, focus="remove", msg="Barcode required", msgtype="danger", last=request.form.get("last")))
 
     item = get_item_by_barcode(barcode)
     if not item:
-        return redirect(_home_url(zone, shelf, focus="remove", msg="Item not found", msgtype="danger"))
+        return redirect(_home_url(zone, shelf, focus="remove", msg="Item not found", msgtype="danger", last=request.form.get("last")))
 
     # A leftover scanned out to 0 is deleted (Undo restores it).
     result = scan_out(barcode)
@@ -1212,18 +1648,20 @@ def move_page():
     location = _build_location(zone, shelf, loc_map)
     status_html = _page_status_html()
 
+    # Pickers link back to /move (they used to jump to the scan page).
     return f"""
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     {_styles()}{_auto_hide_banner_js()}{_camscan_js()}
-    <div class="wrap"><div class="container">
+    <div class="wrap scanPage"><div class="container">
       <div class="card">
         <h2>Move Location</h2>
         {status_html}
         <div class="muted">Pick the new location, then scan the item you want to move.</div>
-        <div class="row"><b>New target:</b> <span class="chip">{_h(location)}</span></div>
-        <div class="row">{_zone_buttons(zone, shelf, loc_map)}</div>
-        {_shelf_selector(zone, shelf, loc_map)}
+        <div class="row"><b>New target:</b> <span class="chip chipAccent">{_h(location)}</span></div>
+        <div class="row">{_location_grid("/move", zone, shelf)}</div>
+        {_shelf_buttons("/move", zone, shelf, loc_map)}
 
-        <form method="post" action="/move-scan?zone={_u(zone)}&shelf={shelf}">
+        <form method="post" action="/move-scan?zone={_u(zone)}&shelf={shelf}" style="margin-top:16px">
           <div class="fieldRow">
             <input type="text" name="barcode" placeholder="Scan item to move" autofocus data-camscan>
             <button class="btn btn-wide" type="submit">Scan</button>
@@ -1235,6 +1673,7 @@ def move_page():
         </div>
       </div>
     </div></div>
+    {_picker_js()}
     """
 
 
@@ -3371,6 +3810,13 @@ def tools_page():
           <td>{_h(name)}</td>
           <td>{has_shelves}</td>
           <td>
+            <form class="inline" method="post" action="/locations-icon">
+              <input type="hidden" name="name" value="{_h(name)}">
+              <select name="icon" aria-label="Icon for {_h(name)}" onchange="this.form.submit()">{_location_icon_options(l["icon"])}</select>
+              <noscript><button class="btn" type="submit">Save</button></noscript>
+            </form>
+          </td>
+          <td>
             <form class="inline" method="post" action="/locations-delete">
               <input type="hidden" name="name" value="{_h(name)}">
               <button class="btn btn-danger">Delete</button>
@@ -3410,15 +3856,16 @@ def tools_page():
 
       <div class="card">
         <h2>Locations</h2>
-        <div class="muted">Add zones here so you never edit code to add a new pantry/cabinet/etc.</div>
+        <div class="muted">Add the places you keep things. Each one becomes a button on the scan page, with an optional icon.</div>
 
         <form method="post" action="/locations-add">
           <div class="fieldRow">
-            <input type="text" name="name" placeholder="New location name (ex: Snack Cabinet)" required>
+            <input type="text" name="name" placeholder="New location name (ex: Supply Closet)" required>
             <select name="has_shelves">
               <option value="1">Has shelves (shows Shelf 1-4)</option>
               <option value="0">No shelves</option>
             </select>
+            <select name="icon" aria-label="Icon">{_location_icon_options()}</select>
             <button class="btn btn-wide" type="submit">Add</button>
           </div>
         </form>
@@ -3426,8 +3873,8 @@ def tools_page():
         <div class="row"></div>
 
         <table>
-          <tr><th>Name</th><th>Has shelves?</th><th>Action</th></tr>
-          {rows if rows else "<tr><td colspan='3' class='muted'>No locations found.</td></tr>"}
+          <tr><th>Name</th><th>Has shelves?</th><th>Icon</th><th>Action</th></tr>
+          {rows if rows else "<tr><td colspan='4' class='muted'>No locations found.</td></tr>"}
         </table>
 
         <div class="muted row">Deleting a location here does NOT delete existing items; it only removes the button/filter option.</div>
@@ -3811,9 +4258,25 @@ def locations_add():
     name = (request.form.get("name", "") or "").strip()
     has_shelves = (request.form.get("has_shelves", "0") or "0").strip()
     hs = True if has_shelves == "1" else False
+    icon = (request.form.get("icon", "") or "").strip()
+    if icon not in _LOCATION_ICONS:
+        icon = ""
 
-    add_location(name, hs)
+    add_location(name, hs, icon)
     return redirect(f"/tools?msgtype=ok&msg=Added%20location%20{_u(name)}")
+
+
+@app.route("/locations-icon", methods=["POST"])
+def locations_icon():
+    name = (request.form.get("name", "") or "").strip()
+    icon = (request.form.get("icon", "") or "").strip()
+    if icon not in _LOCATION_ICONS:
+        icon = ""
+    try:
+        set_location_icon(name, icon)
+    except ValueError as e:
+        return redirect(f"/tools?msgtype=danger&msg={_u(str(e))}")
+    return redirect(f"/tools?msgtype=ok&msg={_u(f'Icon updated for {name}')}")
 
 
 @app.route("/locations-delete", methods=["POST"])

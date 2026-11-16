@@ -104,7 +104,8 @@ def _create_tables(conn):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT UNIQUE NOT NULL,
             has_shelves INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            icon TEXT NOT NULL DEFAULT ''
         );
     """)
 
@@ -282,6 +283,11 @@ def _migrate(conn):
     # `ingredient`, so every ingredient query stays a plain NULL check.
     _ensure_column(conn, "items", "ingredient", "ingredient TEXT")
     _ensure_column(conn, "items", "not_ingredient", "not_ingredient INTEGER NOT NULL DEFAULT 0")
+
+    # Optional per-location icon: a key into the scan page's built-in
+    # SVG set (app._LOCATION_ICONS). Empty = text only; an unknown key
+    # (e.g. from a newer version's backup) also just shows text.
+    _ensure_column(conn, "locations", "icon", "icon TEXT NOT NULL DEFAULT ''")
 
     # Undo marker on event_log (the live event table, owned by
     # inventory._ensure_schema — which creates it with this column on

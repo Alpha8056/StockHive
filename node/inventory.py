@@ -1117,6 +1117,65 @@ def get_undo_offer(event_id):
         conn.close()
 
 
+def get_event_summary(event_id):
+    """For the scan page's "Last scanned" card. Returns None for a bad
+    or unknown id, else {"name", "barcode", "kind", "qty", "location", "delta",
+    "finished", "undone", "undoable", "seconds_left"}. qty/location are
+    the item's current values (for a finished leftover that's still
+    deleted: 0 and where it was). seconds_left is how long Undo stays
+    allowed (0 once it isn't)."""
+    try:
+        event_id = int(event_id)
+    except (TypeError, ValueError):
+        return None
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, created_at, barcode, event_type, delta, undone_by, snapshot FROM event_log WHERE id = ?;",
+            (event_id,),
+        )
+        ev = cur.fetchone()
+        if not ev or ev["event_type"] not in UNDOABLE_EVENT_TYPES:
+            return None
+
+        cur.execute("SELECT name, quantity, location FROM items WHERE barcode = ?;", (ev["barcode"],))
+        item = cur.fetchone()
+        if item:
+            name, qty, location = item["name"], int(item["quantity"] or 0), item["location"]
+        elif ev["snapshot"]:
+            snap_item = json.loads(ev["snapshot"])["item"]
+            name, qty, location = snap_item.get("name"), 0, snap_item.get("location")
+        else:
+            return None
+
+        seconds_left = 0
+        try:
+            _undoable_event(cur, event_id)
+            undoable = True
+            created = datetime.strptime(ev["created_at"], "%Y-%m-%d %H:%M:%S")
+            elapsed = (datetime.utcnow() - created).total_seconds()
+            seconds_left = max(int(UNDO_WINDOW_SECONDS - elapsed), 0)
+        except ValueError:
+            undoable = False
+        return {
+            "name": name or ev["barcode"],
+            "barcode": ev["barcode"],
+            "kind": ev["event_type"],
+            "qty": qty,
+            "location": location or "",
+            "delta": int(ev["delta"] or 0),
+            "finished": ev["event_type"] == "finish",
+            "undone": ev["undone_by"] is not None,
+            "undoable": undoable,
+            "seconds_left": seconds_left,
+        }
+    except (ValueError, sqlite3.OperationalError):
+        return None
+    finally:
+        conn.close()
+
+
 def undo_event(event_id):
     """
     Reverses exactly the change event_id made (applies the opposite
@@ -1730,17 +1789,24 @@ def get_item_stats(barcode: str, days=28):
 # ============================================================
 
 def get_locations():
+    """[{"name", "has_shelves", "icon"}], sorted by name. icon is a key
+    into the app's built-in icon set, or "" for text only."""
     conn = _connect()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT name, has_shelves FROM locations ORDER BY name COLLATE NOCASE;")
+        try:
+            cur.execute("SELECT name, has_shelves, icon FROM locations ORDER BY name COLLATE NOCASE;")
+        except sqlite3.OperationalError:
+            # A just-restored older database before init_db() has added
+            # the icon column: still list its locations, without icons.
+            cur.execute("SELECT name, has_shelves, '' AS icon FROM locations ORDER BY name COLLATE NOCASE;")
         rows = cur.fetchall()
-        return [{"name": r["name"], "has_shelves": bool(r["has_shelves"])} for r in rows]
+        return [{"name": r["name"], "has_shelves": bool(r["has_shelves"]), "icon": r["icon"] or ""} for r in rows]
     finally:
         conn.close()
 
 
-def add_location(name: str, has_shelves: bool):
+def add_location(name: str, has_shelves: bool, icon: str = ""):
     name = (name or "").strip()
     if not name:
         raise ValueError("Location name required")
@@ -1749,12 +1815,26 @@ def add_location(name: str, has_shelves: bool):
     try:
         cur = conn.cursor()
         cur.execute(
-            "INSERT INTO locations (name, has_shelves) VALUES (?, ?);",
-            (name, 1 if has_shelves else 0),
+            "INSERT INTO locations (name, has_shelves, icon) VALUES (?, ?, ?);",
+            (name, 1 if has_shelves else 0, (icon or "").strip()),
         )
         conn.commit()
     except sqlite3.IntegrityError:
         raise ValueError("Location already exists")
+    finally:
+        conn.close()
+
+
+def set_location_icon(name: str, icon: str):
+    """icon "" clears it (text only). The caller validates the key."""
+    name = (name or "").strip()
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE locations SET icon = ? WHERE name = ?;", ((icon or "").strip(), name))
+        if cur.rowcount == 0:
+            raise ValueError("Location not found")
+        conn.commit()
     finally:
         conn.close()
 

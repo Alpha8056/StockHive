@@ -440,7 +440,7 @@ How phone scanning works is in the User Guide:
   phones and tablets.
 - **On an `https://` page:** the browser has to report a camera. Make sure no other
   app is using the camera, then reload the page.
-- **Wrong page:** the button is only next to **Scan (+1)**, **Remove (-1)**,
+- **Wrong page:** the button is only next to the home page's barcode box,
   **Scan item to move** and **Barcode to link**.
 - **The phone was once marked as the kiosk:** open the launcher on the phone, go to
   **Settings**, turn off **This device is a kiosk** under **Display**, and open the

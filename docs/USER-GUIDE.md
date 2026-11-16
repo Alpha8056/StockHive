@@ -90,21 +90,27 @@ something away (**+1**) and when you use something up (**−1**).
 
 ### Pick where you are
 
-At the top of the node's home page, the **Location** card shows your zones (for
-example Pantry, Fridge, Freezer).
+At the top of the node's home page, the **Location** card shows your locations as
+large buttons, each with its icon if you've given it one (see [Add a location](#add-a-location)).
 
-1. Tap the zone you're putting things into.
-2. If that zone has shelves, choose the **Shelf #** (1 to 4).
+1. Tap the location you're putting things into. It turns solid blue (or your
+   theme's accent color).
+2. If that location has shelves, a **Shelf** row appears below. Tap **Shelf 1** to
+   **Shelf 4**. Locations without shelves don't show this row.
 
-The chosen location shows in the top-right corner as **Location**.
+The chosen location shows in the top-right corner as **Location**, in the same color.
 
 ### Add one (+1)
 
-1. Tap the box in the **Scan (+1)** card. It's usually selected already.
-2. Scan the barcode (or type it and tap **Scan**). On a phone, you can tap the
+1. In the **Scan** card, make sure **Add** (green) is on. It is unless you switched
+   to Remove.
+2. Scan the barcode (or type it and tap **Add**). On a phone, you can tap the
    camera button instead. See [Scanning with your phone](#scanning-with-your-phone).
-3. A green banner shows the item and its new count, for example `Milk +1(3)`.
-   - Tap **Edit item** on the banner to change anything about it straight away.
+3. The **Last scanned** card below shows the item, its new count, where it's kept,
+   and a big **Undo** button.
+   - Tap **Edit item** on that card to change anything about it straight away.
+
+The box is ready for the next scan straight away, so you can keep scanning.
 
 **A barcode StockHive hasn't seen before** opens the **Resolve Barcode** page. Pick one:
 
@@ -116,17 +122,24 @@ The chosen location shows in the top-right corner as **Location**.
 
 ### Take one away (−1)
 
-1. Tap the box in the **Remove (-1)** card.
-2. Scan the barcode and tap **Remove**.
-3. A red banner shows the new count, for example `Milk -1(2)`.
+1. In the **Scan** card, tap **Remove**. It turns red, and so does the box.
+2. Scan the barcode (or type it and tap **Remove**).
+3. The **Last scanned** card shows the new count.
+
+Remove stays on while you keep scanning. After about a minute with no activity it
+switches back to **Add** by itself, so the next person doesn't take things away by mistake.
 
 If you see **Item not found**, that barcode isn't in this node. Removing never creates items.
 
-### Add a zone
+### Add a location
 
-1. Tap **Tools**, then scroll to **Locations**.
-2. Type a name (for example `Snack Cabinet`).
-3. Choose **Has shelves (shows Shelf 1-4)** or **No shelves**, and tap **Add**.
+1. Tap **Tools** in the bar at the bottom, then scroll to **Locations**.
+2. Type a name (for example `Supply Closet`).
+3. Choose **Has shelves (shows Shelf 1-4)** or **No shelves**.
+4. Optionally pick an **Icon**, and tap **Add**.
+
+To change the icon of a location you already have, pick a new one in its **Icon**
+column. **No icon** shows just the name.
 
 ---
 
@@ -135,8 +148,8 @@ If you see **Item not found**, that barcode isn't in this node. Removing never c
 **What it's for:** keeping the location right when you move something, for example
 from the Pantry to the Freezer.
 
-1. On the node's home page, tap **Move Location**.
-2. Tap the new zone (and shelf, if it has shelves). **New target** shows where it will go.
+1. On the node's home page, tap **Move** in the bar at the bottom.
+2. Tap the new location (and shelf, if it has shelves). **New target** shows where it will go.
 3. Scan the item and tap **Scan**.
 4. The **Confirm Move** page shows **From** and **To**. Tap **Move**.
 
@@ -150,8 +163,12 @@ Tap **Cancel** or **Back** to leave without moving anything.
 
 ### Undo
 
-After you add one, remove one, or correct a count, an **Undo** button appears at the
-bottom of the screen for about 10 seconds. Tap it to take that change back.
+On the node's home page, the **Last scanned** card has a big **Undo** button for
+about a minute after each scan. Tap it to take that scan back. The card then says
+**Undone** and shows the count again.
+
+On other pages, after you remove one or correct a count, an **Undo** button appears
+at the bottom of the screen for about 10 seconds.
 
 ### Recent Changes
 
@@ -222,7 +239,7 @@ bulk goods or spare parts. StockHive makes a barcode for you, and you can print 
 
 ### Create a custom barcode
 
-1. On the node's home page, under the **Scan (+1)** box, tap **No barcode? Create one →**.
+1. On the node's home page, under the barcode box in the **Scan** card, tap **No barcode? Create one →**.
 2. You get a new code like `SH-KI-00001` and the **Create as new item** form.
 3. Type a name, check the zone and shelf, and tap **Create + Add (+1)**.
 4. The green banner says **Created:** and offers **Print label** and **Edit item**.
@@ -432,13 +449,14 @@ and needs your home network to work.
 while you unpack groceries away from the kitchen screen.
 
 On a phone or tablet, a **camera button** appears next to these boxes:
-**Scan (+1)**, **Remove (-1)**, **Scan item to move** (on **Move Location**) and
-**Barcode to link** (on **Edit item**). Computers and the kiosk screen don't show it.
+the barcode box in the **Scan** card (it adds or removes, whichever mode is on),
+**Scan item to move** (on **Move Location**) and **Barcode to link** (on **Edit item**).
+Computers and the kiosk screen don't show it.
 
 1. Tap the camera button next to the box you want.
 2. Point the camera at the barcode.
 3. The code goes into the box and is submitted, just as if you'd scanned it with a
-   barcode scanner. You'll see the usual green or red banner.
+   barcode scanner. On the home page the **Last scanned** card shows the result.
 
 What happens when you tap the button depends on how you opened the node:
 
